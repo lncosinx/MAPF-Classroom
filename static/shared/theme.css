@@ -1,0 +1,53 @@
+/* MAPF 课堂公共主题：pogema AnimationStyle 色板（PLAN.md §6.7）。老师端、学生端、投屏页共用。 */
+:root {
+  --obstacle: #84A1AE;
+  --self: #c1433c;
+  --other: #6e81af;
+  --c0: #c1433c; --c1: #2e6f9e; --c2: #6e81af; --c3: #00b9c8;
+  --c4: #72D5C8; --c5: #0ea08c; --c6: #8F7B66;
+  --bg: #fafafa;
+  --text: #37474f;
+  --muted: #78909c;
+  --card: #ffffff;
+  --line: #e3e8eb;
+  --free: #ffffff;
+  --fog: #cfd8dc;
+  --memory: #eef2f4;
+  --memory-wall: #b9c9d0;
+  --accent: #2e6f9e;
+  --ok: #0ea08c;
+  --warn: #e0a030;
+  --danger: #c1433c;
+  --radius: 14px;
+  --shadow: 0 2px 10px rgba(55, 71, 79, .08);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--text);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { min-height: 100vh; }
+button { font: inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+.card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
+.btn { border: 0; border-radius: 10px; padding: 10px 18px; background: var(--accent); color: #fff; font-weight: 600; }
+.btn.ghost { background: transparent; color: var(--accent); border: 1.5px solid var(--accent); }
+.btn.danger { background: var(--danger); }
+.btn.ok { background: var(--ok); }
+.btn:disabled { opacity: .45; }
+.muted { color: var(--muted); }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; background: var(--line); }
+.badge.playing { background: #d7f2ec; color: #0b7a6a; }
+.badge.paused { background: #fdf0d5; color: #a56d00; }
+.badge.finished { background: #e3e8f4; color: #2e4a8f; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #37474f; color: #fff;
+  padding: 10px 18px; border-radius: 10px; z-index: 50; box-shadow: var(--shadow); }
+.conn-lost { position: fixed; top: 0; left: 0; right: 0; background: var(--warn); color: #fff; text-align: center;
+  padding: 6px; z-index: 60; font-size: 14px; }
+
+/* 地图 */
+.grid-svg { width: 100%; height: auto; display: block; touch-action: manipulation; user-select: none; }
+.grid-svg .agent { transition: transform 250ms ease-in-out; }
+.grid-svg .pulse { animation: pulse 1.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes pulse { 0% { opacity: .7; transform: scale(.85); } 100% { opacity: 0; transform: scale(1.6); } }
+.grid-svg .cell-click { cursor: pointer; }
+.grid-svg .cell-click:hover { fill: rgba(46, 111, 158, .12); }

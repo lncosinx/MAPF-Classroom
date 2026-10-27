@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+build/
+dist/
+
+# 运行期数据：课堂记录含学生作答，绝不入库
+data/
+*.sqlite
+*.sqlite-journal
+
+# LaCAM 每次求解会在当前目录写日志（native/lacam 里应已去掉，见 CLAUDE.md）
+lacam_log.txt
+
+# 打包产物
+packaging/out/

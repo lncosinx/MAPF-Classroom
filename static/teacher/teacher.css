@@ -1,0 +1,32 @@
+.topbar { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--card);
+  box-shadow: var(--shadow); position: sticky; top: 0; z-index: 10; flex-wrap: wrap; }
+.topbar h1 { font-size: 20px; margin: 0; }
+.topbar .join { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.topbar .join img { width: 72px; height: 72px; }
+.topbar .url { font-size: 18px; font-weight: 700; color: var(--accent); }
+.layout { display: grid; grid-template-columns: 330px minmax(0, 1fr) 290px; gap: 16px; padding: 16px; align-items: start; }
+@media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } }
+.col { display: flex; flex-direction: column; gap: 16px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+.form { display: grid; grid-template-columns: 110px 1fr; gap: 8px 10px; align-items: center; font-size: 14px; }
+.form select, .form input { font: inherit; padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 8px; width: 100%; }
+.form .full { grid-column: 1 / -1; }
+.players { width: 100%; border-collapse: collapse; font-size: 14px; }
+.players td, .players th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; }
+.players select { font: inherit; padding: 3px 4px; border-radius: 6px; border: 1.5px solid var(--line); }
+.on { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #b0bec5; margin-right: 6px; }
+.on.yes { background: var(--ok); }
+.players tr.offline td { color: var(--muted); }
+.players .x { border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 2px 6px; border-radius: 6px; }
+.players .x:hover { background: #fde8e6; color: var(--danger); }
+.apply-error { background: #fde8e6; color: var(--danger); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { display: flex; justify-content: space-between; padding: 4px 0; font-size: 15px; }
+.stat b { font-size: 18px; }
+.toggles { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 3px 10px; font-size: 13px; background: #eef2f4; }
+.chip .sw { width: 10px; height: 10px; border-radius: 50%; }
+.chip.done { background: #d7f2ec; }
+.legend { font-size: 13px; display: flex; gap: 14px; margin-top: 8px; color: var(--muted); }
+.legend i { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }

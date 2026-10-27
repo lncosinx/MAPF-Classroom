@@ -1,0 +1,107 @@
+{
+  "ckpt": "/root/MAPF-Classroom/third_party/weights/capbig_iter_20000.pt",
+  "tag": "classroom-ref-notta",
+  "args": {
+    "ckpt": "/root/MAPF-Classroom/third_party/weights/capbig_iter_20000.pt",
+    "network_config": "configs/network_big.yaml",
+    "set_net": [],
+    "families": "random,mazes",
+    "agent_counts": "8,16,32",
+    "maps_file": "/root/MAPF-Classroom/third_party/maps/dev/{family}.yaml",
+    "num_maps": 64,
+    "max_steps": 128,
+    "on_target": "nothing",
+    "batch_envs": 16,
+    "action_mode": "sample",
+    "base_temp": 1.0,
+    "escape_k": 3,
+    "escape_temp": 1.0,
+    "escape_no_wait_after": 8,
+    "auto_protocol": false,
+    "wait_bias": 1.0,
+    "momentum_bias": 0.0,
+    "zero_channels": "",
+    "reset_hidden_every": 0,
+    "tta": false,
+    "goal_hold": "none",
+    "seeds": "0",
+    "dump_traj": null,
+    "traj_maps": null,
+    "dump_episodes": "/root/MAPF-Classroom/fixtures/reference_episodes.csv",
+    "device": "cpu",
+    "out": "/root/MAPF-Classroom/fixtures/reference_metrics.json",
+    "tag": "classroom-ref-notta"
+  },
+  "results": {
+    "random": {
+      "8": {
+        "CSR": 0.984375,
+        "ISR": 0.99609375,
+        "SoC": 128.171875,
+        "makespan": 27.40625,
+        "escape_frac": 0.0,
+        "avg_neighbors": 0.713287353515625,
+        "edge_flip": 0.045256315996084595,
+        "n": 64,
+        "CSR_ci95": 0.030384800213007407
+      },
+      "16": {
+        "CSR": 0.96875,
+        "ISR": 0.998046875,
+        "SoC": 302.09375,
+        "makespan": 37.546875,
+        "escape_frac": 0.0,
+        "avg_neighbors": 1.4460067749023438,
+        "edge_flip": 0.0491445343450323,
+        "n": 64,
+        "CSR_ci95": 0.04262819590291735
+      },
+      "32": {
+        "CSR": 0.953125,
+        "ISR": 0.99755859375,
+        "SoC": 720.65625,
+        "makespan": 48.484375,
+        "escape_frac": 0.0,
+        "avg_neighbors": 2.8858604431152344,
+        "edge_flip": 0.05304536333756005,
+        "n": 64,
+        "CSR_ci95": 0.051785915130075424
+      }
+    },
+    "mazes": {
+      "8": {
+        "CSR": 0.984375,
+        "ISR": 0.99609375,
+        "SoC": 173.71875,
+        "makespan": 38.375,
+        "escape_frac": 0.0,
+        "avg_neighbors": 0.5332489013671875,
+        "edge_flip": 0.054687992078470415,
+        "n": 64,
+        "CSR_ci95": 0.030384800213007407
+      },
+      "16": {
+        "CSR": 0.890625,
+        "ISR": 0.984375,
+        "SoC": 430.953125,
+        "makespan": 58.515625,
+        "escape_frac": 0.0,
+        "avg_neighbors": 1.2800521850585938,
+        "edge_flip": 0.06350391464320637,
+        "n": 64,
+        "CSR_ci95": 0.07646673698566177
+      },
+      "32": {
+        "CSR": 0.796875,
+        "ISR": 0.98779296875,
+        "SoC": 1182.75,
+        "makespan": 87.828125,
+        "escape_frac": 0.0,
+        "avg_neighbors": 2.6991844177246094,
+        "edge_flip": 0.07882127710422537,
+        "n": 64,
+        "CSR_ci95": 0.09856957285775045
+      }
+    }
+  }
+}
