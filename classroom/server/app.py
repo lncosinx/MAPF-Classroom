@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import logging
 from urllib.parse import quote
@@ -35,6 +36,16 @@ ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "static"
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 log = logging.getLogger("classroom.app")
+
+
+def static_version() -> str:
+    """前端代码版本：static/ 下所有文件的路径、大小、修改时间的摘要。服务重启后变了，旧页面会自动刷新。"""
+    h = hashlib.sha1()
+    for p in sorted(STATIC.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            h.update(f"{p.relative_to(STATIC).as_posix()}:{st.st_size}:{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:12]
 
 
 def lan_ip() -> str:
@@ -69,6 +80,7 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
 
     app = FastAPI(lifespan=lifespan, title="MAPF 课堂")
     app.state.teacher_key = teacher_key
+    app.state.version = static_version()
     app.state.port = port
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -155,7 +167,8 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
                     await old.close(code=4000)
                 except Exception:  # noqa: BLE001
                     pass
-            await ws.send_json({"type": "welcome", "token": player.token, "player": player.public()})
+            await ws.send_json({"type": "welcome", "token": player.token, "player": player.public(),
+                                "version": app.state.version})
             await room.set_online(pid, True)
             rr = room.round_of(pid)
             if rr is None:
@@ -200,7 +213,7 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
         room: Classroom = app.state.room
         hub.screens.add(ws)
         try:
-            await ws.send_json({**room.screen_state(), "join_url": join_url()})
+            await ws.send_json({**room.screen_state(), "join_url": join_url(), "version": app.state.version})
             while True:
                 await ws.receive_text()     # 投屏页只收不发；这里只为感知断开
         except WebSocketDisconnect:
@@ -221,7 +234,7 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
         room: Classroom = app.state.room
         hub.teachers.add(ws)
         try:
-            await ws.send_json({**room.teacher_snapshot(), "join_url": join_url()})
+            await ws.send_json({**room.teacher_snapshot(), "join_url": join_url(), "version": app.state.version})
             while True:
                 try:
                     msg = TeacherMsg.validate_python(await ws.receive_json())

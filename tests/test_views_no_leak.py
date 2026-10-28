@@ -14,7 +14,7 @@ from classroom.core.views import ViewMemory, in_box, student_view, view_box
 from classroom.maps.generate import generate, random_pairs
 from classroom.core.coords import parse_map
 
-FORBIDDEN_KEYS = {"expert", "expert_actions", "expert_source", "ai", "model", "model_actions", "model_probs", "custom_map",
+FORBIDDEN_KEYS = {"expert", "expert_actions", "expert_source", "ai", "ai_probs", "model", "model_actions", "model_probs", "custom_map",
                   "probs", "logits", "attn", "ai_edges", "targets", "positions"}
 
 

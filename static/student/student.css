@@ -60,10 +60,37 @@
   gap: 6px; font-size: 14px; }
 .msg .ic { font-size: 20px; }
 .msg:disabled { opacity: .4; }
-.simple .msgs { grid-template-columns: repeat(4, 1fr); }
-.simple .msg { justify-content: center; min-height: 56px; }
-.simple .msg .ic { font-size: 28px; }
+/* 简洁模式：图标 + 短词，字放大（只放图标小朋友看不懂，2026-10-28 用户反馈） */
+.simple .msg { min-height: 56px; font-size: 17px; }
+.simple .msg .ic { font-size: 26px; }
+.simple .comm, .simple .request, .simple .timer .num, .simple .timer .muted { font-size: 19px; }
+.simple .chip { font-size: 18px; min-height: 48px; }
+.simple .chip .tag { font-size: 14px; }
 .log { margin-top: 10px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
 
 /* 赛后复盘 */
 .review-wrap { margin-top: 16px; }
+
+/* M6：两种模式与动效 */
+.big-me { font-size: 22px; }
+.big-me .avatar { font-size: 36px; vertical-align: middle; }
+.stars-big { font-size: 44px; color: #f2b705; letter-spacing: 6px; margin: 6px 0; }
+.toast-big { font-size: 24px; padding: 12px 24px; }
+/* 新的一步：地图边框闪一下 */
+.map-card.flash { animation: map-flash 600ms ease-out; }
+@keyframes map-flash { 0% { box-shadow: 0 0 0 4px rgba(46, 111, 158, .55); } 100% { box-shadow: var(--shadow); } }
+/* 倒计时最后 5 秒：圆环脉冲、数字变红 */
+.timer.low svg { animation: ring-pulse 1s ease-in-out infinite; }
+.timer.low svg text { fill: var(--danger); }
+@keyframes ring-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+/* 方向键：选中弹一下 */
+.pad button.sel { animation: sel-pop 220ms ease-out; }
+@keyframes sel-pop { 0% { transform: scale(.9); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+/* 进阶：AI 概率条、我的统计 */
+.probbars { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.probbars .pb { display: grid; grid-template-columns: 24px 1fr 40px; align-items: center; gap: 6px; font-size: 14px; }
+.probbars .pi { text-align: center; font-weight: 700; }
+.probbars .pt { height: 10px; background: #eef2f4; border-radius: 5px; overflow: hidden; }
+.probbars .pt i { display: block; height: 100%; background: #e0a030; border-radius: 5px; }
+.probbars .pv { text-align: right; color: var(--muted); }
+.mystats { font-size: 15px; }

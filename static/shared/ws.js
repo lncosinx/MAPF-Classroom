@@ -29,6 +29,15 @@ export class Connection {
   }
 }
 
+// 前端代码版本：服务端在 welcome / 快照里带上 version。页面只靠 WS 重连时，内存里还是旧代码，
+// 发现版本和第一次拿到的不同，就刷新一次，拿到新代码（2026-10-28：老师重启服务后学生页仍是旧界面）
+let seenVersion = null;
+export function checkVersion(v) {
+  if (!v) return;
+  if (seenVersion && seenVersion !== v) { location.reload(); return; }
+  seenVersion = v;
+}
+
 // localStorage 可能被禁用（隐私模式等），读写都要兜底
 export const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -61,6 +70,11 @@ export const MESSAGES = {
   go_first: { icon: "✅", text: "你先走" },
   arrived: { icon: "🏁", text: "我到了" },
 };
+
+// 简洁模式的动物头像：每个智能体固定一个（i 号 -> ANIMALS[i]），超过 24 个时动物后面加数字
+export const ANIMALS = ["🐱", "🐶", "🐰", "🐼", "🦊", "🐸", "🐯", "🐵", "🐧", "🐨", "🐷", "🐮",
+                        "🦁", "🐻", "🐹", "🐭", "🐔", "🦄", "🐙", "🐳", "🐢", "🦉", "🐝", "🦋"];
+export const agentAvatar = (i) => ANIMALS[i % ANIMALS.length] + (i >= ANIMALS.length ? String(Math.floor(i / ANIMALS.length) + 1) : "");
 
 export const PALETTE = ["#c1433c", "#2e6f9e", "#6e81af", "#00b9c8", "#72D5C8", "#0ea08c", "#8F7B66"];
 export const agentColor = (i) => PALETTE[i % PALETTE.length];

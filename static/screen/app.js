@@ -1,6 +1,6 @@
 // 投屏页：大字号排行榜 + 各组卡片。只显示服务端下发的内容：
 // 比赛中（老师没打开"显示全图"）服务端根本不发地图，这里只画进度；某组结束后才画它的全图。
-import { Connection, agentColor } from "/static/shared/ws.js";
+import { Connection, agentColor, agentAvatar, checkVersion } from "/static/shared/ws.js";
 import { GridView } from "/static/shared/grid-renderer.js";
 
 const { createApp, reactive, computed } = Vue;
@@ -11,7 +11,7 @@ createApp({
   setup() {
     const st = reactive({ data: null, online: false, joinUrl: "" });
     new Connection("/ws/screen", {
-      onMessage: (m) => { if (m.type === "screen") { st.data = m; if (m.join_url) st.joinUrl = m.join_url; } },
+      onMessage: (m) => { if (m.type === "screen") { checkVersion(m.version); st.data = m; if (m.join_url) st.joinUrl = m.join_url; } },
       onStatus: (ok) => { st.online = ok; },
     });
     fetch("/api/join-info").then((r) => r.json()).then((j) => (st.joinUrl = j.url)).catch(() => {});
@@ -20,11 +20,14 @@ createApp({
     const groupOf = (g) => st.data.groups.find((x) => x.group === g);
     // 简洁模式：按到达比例给星星
     const stars = (m) => (!m ? "" : "★".repeat(m.CSR === 1 ? 3 : m.ISR >= 0.66 ? 2 : m.ISR > 0 ? 1 : 0).padEnd(3, "☆"));
+    // 简洁模式：动物头像（和学生页一致，小朋友认得出"我是小猫"）；进阶模式：编号
     function scene(g) {
-      const v = g.map;
+      const v = g.map, emo = simple.value;
       return { H: v.H, W: v.W, cells: v.map,
-               agents: v.positions.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i), label: String(i + 1) })),
-               goals: v.targets.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i), label: String(i + 1) })) };
+               agents: v.positions.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i), label: String(i + 1),
+                                                    emoji: emo ? agentAvatar(i) : null })),
+               goals: v.targets.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i),
+                                                 label: emo ? null : String(i + 1), emoji: emo ? agentAvatar(i) : null })) };
     }
     const pct = (e) => (e.N ? Math.round(100 * (e.at_goal || 0) / e.N) : 0);
     return { st, STATUS, simple, groupOf, stars, scene, pct };

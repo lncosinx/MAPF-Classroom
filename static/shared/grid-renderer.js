@@ -4,8 +4,10 @@
 //   H, W                 地图尺寸
 //   cells[r]             每行一个字符串：'.' 可见空地  '#' 可见障碍  'm' 记忆中的空地  'M' 记忆中的障碍
 //                        's' 队友共享来的空地  'S' 共享来的障碍  '?' 未知（迷雾）
-//   agents[]             {id, r, c, color, label, self, contact}   contact=true：在通信范围内，画高亮光圈、可点击
-//   goals[]              {id, r, c, color, self, proj, label}       proj=true：目标在视野外，这是它在视野框边上的投影（同 pogema ch2，可能落在墙上或别人身上）
+//   agents[]             {id, r, c, color, label, self, contact, emoji, badge, shake}
+//                        contact=true：在通信范围内，画高亮光圈、可点击；emoji：简洁模式的动物头像（代替编号）；
+//                        badge：编号旁的小动物（老师页简洁模式）；shake=true：这一步被挡住了，晃一下（随 stepKey 重播）
+//   goals[]              {id, r, c, color, self, proj, label, emoji, arrived}   arrived=true：刚到达，旗子弹一下       proj=true：目标在视野外，这是它在视野框边上的投影（同 pogema ch2，可能落在墙上或别人身上）
 //   arrows[]             {r, c, action, color, dashed}     动作箭头（专家 / AI / 幽灵预览）
 //   box                  [r0, c0, r1, c1] | null            自己的视野框（虚线）
 //   boxes[]              {box, color}                       老师端：各学生的视野框
@@ -106,8 +108,17 @@ export const GridView = {
       <circle v-if="a.self" class="pulse" :cx="S / 2" :cy="S / 2" :r="S * 0.42" fill="none" :stroke="a.color" stroke-width="3"/>
       <circle v-if="a.contact" :cx="S / 2" :cy="S / 2" :r="S * 0.46" fill="none" stroke="var(--contact)"
               stroke-width="3" stroke-dasharray="5 3"/>
-      <circle :cx="S / 2" :cy="S / 2" :r="S * 0.34" :fill="a.color" stroke="#fff" stroke-width="2.5"/>
-      <text v-if="a.label" :x="S / 2" :y="S / 2 + 5" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">{{ a.label }}</text>
+      <g :key="'in' + sk + (a.shake ? 's' : '')" :class="{ shake: a.shake }">
+        <template v-if="a.emoji">
+          <circle :cx="S / 2" :cy="S / 2" :r="S * 0.4" fill="#fff" :stroke="a.color" stroke-width="3.5"/>
+          <text :x="S / 2" :y="S / 2 + S * 0.17" text-anchor="middle" :font-size="S * 0.5" class="emoji">{{ a.emoji }}</text>
+        </template>
+        <template v-else>
+          <circle :cx="S / 2" :cy="S / 2" :r="S * 0.34" :fill="a.color" stroke="#fff" stroke-width="2.5"/>
+          <text v-if="a.label" :x="S / 2" :y="S / 2 + 5" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">{{ a.label }}</text>
+        </template>
+        <text v-if="a.badge" :x="S * 0.86" :y="S * 0.3" text-anchor="middle" :font-size="S * 0.32" class="emoji">{{ a.badge }}</text>
+      </g>
       <rect v-if="a.contact && scene.clickable" :width="S" :height="S" fill="transparent" class="cell-click"
             @click.stop="$emit('agent', a.id)"/>
     </g>
@@ -116,6 +127,7 @@ export const GridView = {
          格子上有智能体时，旗子缩小画在右上角。 -->
     <g v-for="g in goalMarks" :key="'g' + g.id"
        :transform="'translate(' + (g.c * S + (g.small ? S * 0.5 : 0)) + ',' + (g.r * S + (g.small ? -S * 0.04 : 0)) + ') scale(' + (g.small ? 0.5 : 1) + ')'">
+      <g :key="'gi' + sk + (g.arrived ? 'a' : '')" :class="{ pop: g.arrived }">
       <!-- 投影：灰色、空心、虚线，刻意做得不起眼，避免被当成真目标；真目标是实心彩色旗 -->
       <template v-if="g.proj">
         <rect x="5" y="5" :width="S - 10" :height="S - 10" rx="7" fill="#fff" fill-opacity="0.6"
@@ -132,7 +144,9 @@ export const GridView = {
         <!-- 编号（老师端）：色板只有 7 种颜色会重复，靠编号对应到同号智能体。白色描边保证压在墙上也能读 -->
         <text v-if="g.label" :x="S * 0.66" :y="S * 0.86" text-anchor="middle" :font-size="g.small ? 22 : 15"
               font-weight="700" :fill="g.color" stroke="#fff" stroke-width="3.5" paint-order="stroke">{{ g.label }}</text>
+        <text v-if="g.emoji" :x="S * 0.7" :y="S * 0.92" text-anchor="middle" :font-size="g.small ? 26 : 16" class="emoji">{{ g.emoji }}</text>
       </template>
+      </g>
     </g>
     <!-- 动作箭头 -->
     <g v-for="a in arrows" :key="'ar' + sk + '-' + a.key" :opacity="a.opacity || 0.9" :class="{ 'after-move': sk !== '' }">

@@ -23,7 +23,8 @@
   --danger: #c1433c;
   --radius: 14px;
   --shadow: 0 2px 10px rgba(55, 71, 79, .08);
-  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  /* emoji 字体放在后面：Windows 10+ 自带 Segoe UI Emoji，离线也能显示动物头像 */
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
   color: var(--text);
 }
 * { box-sizing: border-box; }
@@ -53,6 +54,19 @@ button:disabled { cursor: not-allowed; }
 /* 叠加层等智能体 250 ms 补间走完再淡入，和智能体同步（见 grid-renderer.js 的 stepKey） */
 .grid-svg .after-move { animation: after-move 150ms ease-out 250ms both; }
 @keyframes after-move { from { opacity: 0; } to { opacity: 1; } }
+.grid-svg .emoji { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+/* 被挡住：左右晃一下 */
+.grid-svg .shake { animation: shake 420ms ease-in-out; transform-box: fill-box; transform-origin: center; }
+@keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); }
+  60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
+/* 到达终点：旗子弹一下 */
+.grid-svg .pop { animation: pop 500ms cubic-bezier(.2, 1.6, .4, 1) 250ms both; transform-box: fill-box; transform-origin: 50% 90%; }
+@keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
+/* 彩带（简洁模式到达终点）：前端临时生成约 40 片，2 秒后移除 */
+.confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 80; }
+.confetti i { position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 2px; opacity: .95;
+  animation: confetti-fall 1.8s ease-in forwards; }
+@keyframes confetti-fall { to { transform: translateY(105vh) rotate(720deg); opacity: .8; } }
 .grid-svg .pulse { animation: pulse 1.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
 @keyframes pulse { 0% { opacity: .7; transform: scale(.85); } 100% { opacity: 0; transform: scale(1.6); } }
 .grid-svg .cell-click { cursor: pointer; }

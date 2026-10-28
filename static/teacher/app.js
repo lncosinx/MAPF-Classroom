@@ -1,11 +1,11 @@
 // 老师端：规则（含课例模板）→ 座位（下拉 / 拖拽）→ 开始 / 暂停 / 立即结算 / 结束，上帝视角看全图和建议；
 // "地图工坊"标签页里生成、编辑、保存、导入导出地图（static/teacher/workshop.js）。
-import { Connection, ACTIONS, MESSAGES, agentColor, store, cellFromEvent } from "/static/shared/ws.js";
+import { Connection, ACTIONS, MESSAGES, agentColor, agentAvatar, store, cellFromEvent, checkVersion } from "/static/shared/ws.js";
 import { GridView } from "/static/shared/grid-renderer.js";
-import { MapWorkshop } from "/static/teacher/workshop.js";
-import { ReviewPanel } from "/static/teacher/review.js";
+import { createWorkshop, WorkshopTools, WorkshopCanvas } from "/static/teacher/workshop.js";
+import { createReview, ReviewSide, ReviewMain } from "/static/teacher/review.js";
 
-const { createApp, reactive, computed, ref, nextTick, onMounted, onBeforeUnmount } = Vue;
+const { createApp, reactive, computed, ref, nextTick, watch, onMounted, onBeforeUnmount } = Vue;
 
 const OPTIONS = {
   view_radius: [[null, "全图可见"], [1, "1 格"], [2, "2 格"], [3, "3 格"], [4, "4 格"], [5, "5 格"]],
@@ -22,13 +22,22 @@ const OPTIONS = {
 const STATUS = { lobby: "未开始", playing: "进行中", paused: "暂停", finished: "已结束" };
 
 createApp({
-  components: { GridView, MapWorkshop, ReviewPanel },
+  components: { GridView, WorkshopTools, WorkshopCanvas, ReviewSide, ReviewMain },
   setup() {
     const st = reactive({
       online: false, denied: false, players: [], maps: [], templates: [], defaults: null, joinUrl: "",
       // 分组比拼：groups[g] 是第 g 组的 teacher_state（_rx = 收到时刻，用来算倒计时）；sel = 正在看的组
-      groups: [], sel: 0, overview: false, leaderboard: [], references: {}, screenLive: false,
+      groups: [], sel: 0, overview: false, sidesOut: false, thumbsShown: false,
+      // 布局：class = 规则/同学 | 中间 | 控制/排行榜；workshop = 工坊工具 | 大画布；review = 复盘明细 | 复盘地图 | 控制/排行榜
+      mode: "class",
+      // 右栏（控制 / 排行榜）可以往右收起，让出宽度（记在浏览器里）；rightOut = 正在滑出 / 滑入
+      rightHidden: store.get("mapf.teacher.rightHidden") === "1", rightOut: false,
+      leaderboard: [], references: {}, screenLive: false,
       tab: "class", templateName: "",
+      // 规则卡片收起 / 展开（记在浏览器里）
+      rulesCollapsed: store.get("mapf.teacher.rulesCollapsed") === "1",
+      // "本步"卡片叠到"控制"卡片后面（记在浏览器里）
+      stepStacked: store.get("mapf.teacher.stepStacked") === "1", ctrlH: 0, stackNat: { step: 0, comm: 0, result: 0 },
       form: null, dirty: false, pendingApply: false, applyError: "", toast: "", now: performance.now(),
       show: { expert: true, ai: false, boxes: true, edges: false, range: false, links: true },
       // 地图缩放："fit" = 整张图缩进窗口；数字 = 相对地图框宽度的倍数（放大后在框内滚动）
@@ -46,6 +55,7 @@ createApp({
     }
     function onMessage(m) {
       if (m.type === "classroom") {
+        checkVersion(m.version);
         // 应用规则成功后服务端会推一份新的 classroom 快照；这时才把表单换成服务端的设置
         if (st.pendingApply) { st.pendingApply = false; st.dirty = false; st.applyError = ""; }
         st.players = m.players; st.maps = m.maps; st.templates = m.templates; st.defaults = m.defaults;
@@ -109,7 +119,7 @@ createApp({
     // ---- 地图选择：选了地图库里的图就不再用工坊的图
     function pickPreset() { st.form.custom_map = null; st.dirty = true; }
     function useWorkshopMap(spec) {
-      st.form.custom_map = spec; st.dirty = true; st.tab = "class";
+      st.form.custom_map = spec; st.dirty = true; setTab("class");
       if (status.value === "playing" || status.value === "paused") { toast("比赛进行中，先点「结束」"); return; }
       applySettings();
     }
@@ -152,6 +162,77 @@ createApp({
       const [g, a] = v.split(":");
       send({ type: "assign", player_id: pid, group: Number(g), agent: a === "" ? null : Number(a) });
     }
+    // ---- 叠卡片：本步 / 本步通信 / 本局结果依次滑到控制卡片后面，每张只在下沿露出一条摘要（像一叠卡片的边）。
+    //      第 i 张用负的 margin-top 往上拉：拉的距离 = 它的高度 − 露出的高度 + 间距，于是它的下沿正好比上一张低 PEEK。
+    //      叠起时高度封顶到控制卡片的高度（max-height），否则很高的卡片（同学多、通信多）会从控制卡片上方露头。
+    //      高度量的是卡片里内容包装层（.stack-body）：卡片自己被 max-height 卡住时也能量到真实高度
+    const PEEK = 34, GAP = 16, CARD_PAD = 32;   // 露出的高度；.stack 的 gap；.card 上下内边距之和
+    const ctrlCard = ref(null);
+    const stackBodies = {};
+    let ro = null;
+    function measureStack() {
+      if (ctrlCard.value) st.ctrlH = ctrlCard.value.offsetHeight;
+      for (const [k, el] of Object.entries(stackBodies)) if (el) st.stackNat[k] = el.offsetHeight + CARD_PAD;
+    }
+    function setBody(key, el) {
+      const old = stackBodies[key];
+      if (old === el) return;
+      if (old && ro) ro.unobserve(old);
+      stackBodies[key] = el;
+      if (el && ro) ro.observe(el);
+    }
+    onMounted(() => {
+      if (window.ResizeObserver) {
+        ro = new ResizeObserver(measureStack);
+        for (const el of Object.values(stackBodies)) if (el) ro.observe(el);
+        watch(ctrlCard, (el, old) => { if (old) ro.unobserve(old); if (el) ro.observe(el); }, { immediate: true });
+      }
+    });
+    onBeforeUnmount(() => ro && ro.disconnect());
+    // 顶栏高度（窗口窄时会折行变高）写进 CSS 变量 --topbar-h：地图工坊的工具栏贴在顶栏下面、单独滚动
+    const topbar = ref(null);
+    let topRo = null;
+    onMounted(() => {
+      const setH = () => topbar.value && document.documentElement.style.setProperty("--topbar-h", `${topbar.value.offsetHeight}px`);
+      setH();
+      if (window.ResizeObserver && topbar.value) { topRo = new ResizeObserver(setH); topRo.observe(topbar.value); }
+    });
+    onBeforeUnmount(() => topRo && topRo.disconnect());
+    function toggleStack() {
+      measureStack();
+      st.stepStacked = !st.stepStacked;
+      store.set("mapf.teacher.stepStacked", st.stepStacked ? "1" : "0");
+    }
+    // 控制卡片后面现在有哪几张（本步通信、本局结果按条件出现）
+    const stackKeys = computed(() => {
+      const v = r.value, keys = ["step"];
+      if (v && v.settings.comm_enabled && v.status !== "lobby") keys.push("comm");
+      if (v && v.metrics) keys.push("result");
+      return keys;
+    });
+    function underStyle(key) {
+      const depth = stackKeys.value.indexOf(key) + 1, nat = st.stackNat[key];
+      const style = { zIndex: 10 - depth };
+      if (!nat) return style;
+      if (!st.stepStacked) return { ...style, maxHeight: `${nat}px` };
+      const h = Math.max(PEEK, Math.min(nat, st.ctrlH || nat));
+      return { ...style, maxHeight: `${h}px`, marginTop: `${-(h - PEEK + GAP)}px`, transform: `scale(${1 - 0.035 * depth})` };
+    }
+    function toggleRules() {
+      st.rulesCollapsed = !st.rulesCollapsed;
+      store.set("mapf.teacher.rulesCollapsed", st.rulesCollapsed ? "1" : "0");
+      setTimeout(measure, 540);   // 等过渡动画（0.5 s）走完再量地图框位置
+    }
+    // 收起时显示的一行摘要
+    const rulesSummary = computed(() => {
+      const s = st.form;
+      if (!s) return "";
+      const mapTitle = s.custom_map ? s.custom_map.title : ((st.maps.find((m) => m.name === s.preset) || {}).title || s.preset);
+      const parts = [mapTitle, s.num_groups > 1 ? `${s.num_groups} 组` : null,
+                     s.view_radius == null ? "全图可见" : `视野 ${s.view_radius} 格`,
+                     s.comm_enabled ? "可以通信" : "不通信", s.ui_mode === "simple" ? "简洁界面" : "进阶界面"];
+      return parts.filter(Boolean).join(" · ");
+    });
     const groupLabel = (g) => (st.groups.length > 1 ? `第 ${g + 1} 组·` : "");
     const setScreenLive = (v) => send({ type: "screen", live_maps: v });
     function removePlayer(p) {
@@ -176,6 +257,8 @@ createApp({
       return st.groups.length ? "finished" : "lobby";
     });
     const multi = computed(() => st.groups.length > 1);
+    const simpleMode = computed(() => !!(r.value && r.value.settings.ui_mode === "simple"));
+    const ava = (i) => (simpleMode.value ? " " + agentAvatar(i) : "");
     const STATUS_SHORT = { lobby: "未开始", playing: "进行中", paused: "暂停", finished: "已结束" };
     // "全部"视图里的缩略图
     function thumbScene(g) {
@@ -196,6 +279,87 @@ createApp({
       return m;
     });
     const nextTickMeasure = () => nextTick(measure);
+
+    // ---- "全部"总览：两侧卡片收起，中间占满；算出列数和缩略图大小，让所有组一屏放下、不用滚动
+    const overviewOn = computed(() => st.tab === "class" && multi.value && st.overview);
+    const thumbsBox = ref(null);
+    const THUMB_PAD = 19, THUMB_HEAD = 30, THUMB_GAP = 12;     // 卡片内边距 + 边框、标题行、卡片间距
+    const OV_CONTROLS_H = 76;                                   // 底部控制栏（按钮 + 上边距 + 卡片底边距）
+    const thumbFit = reactive({ cols: 3, w: 240 });
+    function measureThumbs() {
+      const el = thumbsBox.value, g0 = st.groups[0];
+      if (!el || !g0) return;
+      const k = st.groups.length, aspect = g0.view.H / g0.view.W;
+      const Wc = el.clientWidth;
+      const Hc = window.innerHeight - (el.getBoundingClientRect().top + window.scrollY) - 24 - OV_CONTROLS_H;
+      let best = { cols: 1, w: 0 };
+      for (let c = 1; c <= k; c++) {
+        const rows = Math.ceil(k / c);
+        const byW = (Wc - (c - 1) * THUMB_GAP) / c - THUMB_PAD;
+        const byH = ((Hc - (rows - 1) * THUMB_GAP) / rows - THUMB_PAD - THUMB_HEAD) / aspect;
+        const w = Math.floor(Math.min(byW, byH));
+        if (w > best.w) best = { cols: c, w };
+      }
+      thumbFit.cols = best.cols; thumbFit.w = Math.max(80, best.w);
+    }
+    // 过渡分两段，任何时候都不在动画中压窄内容（压窄会让卡片里的字竖排、缩略图排两次版）：
+    //   进入：两侧卡片保持原宽度向外滑出 + 淡出（SIDE_MS）→ 一次性切成全宽 → 按最终宽度排好缩略图 → 缩略图淡入
+    //   退出：缩略图淡出（THUMB_MS）→ 恢复三栏 → 两侧卡片从外面滑回来
+    const SIDE_MS = 300, THUMB_MS = 250;
+    const raf2 = (fn) => requestAnimationFrame(() => requestAnimationFrame(fn));   // 等布局生效后再改样式，过渡才会播放
+    let ovTimer = null;
+    function enterOverview() {
+      clearTimeout(ovTimer);
+      st.sidesOut = true;
+      ovTimer = setTimeout(() => {
+        st.overview = true;
+        nextTick(() => { measureThumbs(); raf2(() => (st.thumbsShown = true)); });
+      }, SIDE_MS);
+    }
+    function exitOverview(g) {
+      clearTimeout(ovTimer);
+      st.thumbsShown = false;
+      ovTimer = setTimeout(() => {
+        if (g != null) st.sel = g;
+        st.overview = false;
+        nextTick(() => { measure(); raf2(() => { st.sidesOut = false; }); });
+      }, st.overview ? THUMB_MS : 0);
+    }
+    // ---- 标签切换。地图工坊有自己的布局（左边工具卡片 + 中间大画布）；切换布局时和总览一样分两段，
+    //      不在动画中压窄内容：当前两侧卡片滑出 → 换布局 → 新的侧边卡片滑入（画布另有一段往左滑到位的动画）
+    let tabTimer = null;
+    function setTab(t) {
+      if (t === st.tab) return;
+      const toMode = t === "workshop" || t === "review" ? t : "class";
+      clearTimeout(ovTimer); clearTimeout(tabTimer);
+      if (t === "review") review.enter(); else review.leave();      // 每次切到复盘都重新读课堂记录
+      st.overview = false; st.thumbsShown = false;          // 离开课堂标签时退出总览
+      if (toMode === st.mode) { st.tab = t; st.sidesOut = false; nextTick(measure); return; }
+      st.sidesOut = true;
+      tabTimer = setTimeout(() => {
+        st.tab = t; st.mode = toMode;
+        nextTick(() => { measure(); raf2(() => { st.sidesOut = false; }); });
+      }, SIDE_MS);
+    }
+    // ---- 右栏收起 / 展开：和换布局一样分两段（先滑出再让出宽度；先占回宽度再滑进来），不在动画中压窄内容
+    let rightTimer = null;
+    function toggleRight() {
+      clearTimeout(rightTimer);
+      const hide = !st.rightHidden;
+      store.set("mapf.teacher.rightHidden", hide ? "1" : "0");
+      if (hide) {
+        st.rightOut = true;
+        rightTimer = setTimeout(() => { st.rightHidden = true; nextTick(measure); }, SIDE_MS);
+      } else {
+        st.rightOut = true; st.rightHidden = false;
+        nextTick(() => { measure(); raf2(() => { st.rightOut = false; }); });
+      }
+    }
+    // 组数变了（新开一局改了分组数）要重新排
+    watch(() => st.groups.length, () => { if (overviewOn.value) nextTick(measureThumbs); });
+    const onEsc = (e) => { if (e.key === "Escape" && overviewOn.value) exitOverview(); };
+    onMounted(() => { window.addEventListener("keydown", onEsc); window.addEventListener("resize", measureThumbs); });
+    onBeforeUnmount(() => { window.removeEventListener("keydown", onEsc); window.removeEventListener("resize", measureThumbs); });
     const remaining = computed(() => {
       const ms = r.value && r.value.countdown_ms;
       if (ms == null) return null;
@@ -207,7 +371,9 @@ createApp({
       if (!v) return null;
       const agents = v.positions.map((p, i) => {
         const pl = playerOfAgent.value[i];
-        return { id: i, r: p[0], c: p[1], color: agentColor(i), label: String(i + 1), self: !!pl && pl.online };
+        // 简洁模式：编号旁加学生看到的动物，方便老师和学生对上号
+        return { id: i, r: p[0], c: p[1], color: agentColor(i), label: String(i + 1), self: !!pl && pl.online,
+                 badge: simpleMode.value ? agentAvatar(i) : null };
       });
       const goals = v.targets.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i), label: String(i + 1) }));
       const arrows = [];
@@ -250,7 +416,18 @@ createApp({
     const mapWrap = ref(null);
     const fitH = ref(480);       // 地图框可用高度（px）：窗口底部到地图框顶部，再留出图例的位置
     const LEGEND_SPACE = 60;
+    // 左栏撑满到窗口底部（只在窗口缩放时量一次左栏的位置）。同学卡片用弹性布局填满规则卡片剩下的空间：
+    // 规则卡片收起 / 展开的每一帧，同学卡片都跟着同步变高，不会"先小后长"（以前是动画结束后才用 JS 重算高度）
+    const leftCol = ref(null);
+    const leftColH = ref(600);
+    function measurePlayers() {
+      const el = leftCol.value;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      leftColH.value = Math.max(480, window.innerHeight - top - 16);
+    }
     function measure() {
+      measurePlayers();
       const el = mapWrap.value;
       if (!el) return;
       // 用地图框在文档里的位置（不随页面滚动变化），保证页面滚到顶时整张图正好在窗口里
@@ -290,7 +467,12 @@ createApp({
       return e.type;
     }
 
-    return { keyParam: key || "", nextTickMeasure, seatValue, groupLabel, setScreenLive, multi, STATUS_SHORT, thumbScene, fmtMetric, toast, rpc, pickPreset, useWorkshopMap, currentTemplate, loadTemplate, saveTemplate, deleteTemplate,
+    // 地图工坊的编辑状态：整页只建一份，工具卡片和画布共用
+    const workshop = createWorkshop({ rpc, toast, getMaps: () => st.maps, onUse: useWorkshopMap });
+    const review = createReview({ rpc, toast, keyParam: key || "" });
+    watch(() => st.online, (ok) => { if (ok) workshop.revalidate(); });
+
+    return { workshop, review, toggleRight, topbar, setTab, overviewOn, thumbsBox, thumbFit, THUMB_PAD, enterOverview, exitOverview, leftCol, leftColH, ctrlCard, setBody, toggleStack, underStyle, stackKeys, toggleRules, rulesSummary, ava, simpleMode, keyParam: key || "", nextTickMeasure, seatValue, groupLabel, setScreenLive, multi, STATUS_SHORT, thumbScene, fmtMetric, toast, rpc, pickPreset, useWorkshopMap, currentTemplate, loadTemplate, saveTemplate, deleteTemplate,
              onDragStart, onDropMap, eventText, zoomStep, setZoom, mapStyle, wrapStyle, zoomLabel, mapWrap, st, r, status, scene, remaining, OPTIONS, STATUS, applySettings, cmd, assign, agentOfPlayer,
              removePlayer, removeOffline, sortedPlayers, offlineCount, MESSAGES,
              playerOfAgent, agentColor, icon };
@@ -299,7 +481,7 @@ createApp({
   <div>
     <div v-if="st.denied" class="conn-lost">老师页面只能在本机打开，或者使用启动时打印的带 key 的地址</div>
     <div v-else-if="!st.online" class="conn-lost">连接断开，正在重连……</div>
-    <div class="topbar">
+    <div ref="topbar" class="topbar">
       <h1>🧭 MAPF 课堂 · 老师</h1>
       <span :class="['badge', status]">{{ STATUS[status] }}</span>
       <span v-if="r" class="muted">{{ r.preset_title }} · {{ r.num_agents }} 个智能体</span>
@@ -309,10 +491,28 @@ createApp({
       </div>
     </div>
 
-    <div class="layout" v-if="r && st.form">
-      <div class="col">
-        <div class="card">
-          <h2>规则</h2>
+    <div :class="['layout', { overview: overviewOn, 'sides-out': st.sidesOut, 'ws-mode': st.mode === 'workshop',
+                  'rv-mode': st.mode === 'review', 'no-right': st.rightHidden || st.mode === 'workshop', 'right-out': st.rightOut }]" v-if="r && st.form">
+      <!-- 各栏按布局模式用 v-show 显隐（行内 display:none，不会被别的 CSS 规则盖掉）。地图工坊的左栏：工具卡片 -->
+      <div v-show="st.mode === 'workshop'" class="col side left ws-only">
+        <WorkshopTools :w="workshop" :maps="st.maps" :can-use="status !== 'playing' && status !== 'paused'"/>
+      </div>
+      <!-- 复盘的左栏：每个智能体的对比、本步通信、教学指标、导出 -->
+      <div v-show="st.mode === 'review'" class="col side left rv-only">
+        <ReviewSide :v="review"/>
+      </div>
+      <div v-show="st.mode === 'class'" ref="leftCol" class="col side left class-only" :style="{ minHeight: leftColH + 'px' }">
+        <div class="card rules-card">
+          <h2 class="fold" @click="toggleRules" :title="st.rulesCollapsed ? '展开规则' : '收起规则'">
+            规则 <span :class="['fold-icon', { closed: st.rulesCollapsed }]">▾</span>
+            <span v-if="st.dirty" class="badge paused" style="margin-left:auto">有改动未应用</span>
+          </h2>
+          <!-- 收起 / 展开用 grid-template-rows 1fr ⇄ 0fr 过渡：内容高度不固定也能平滑动画 -->
+          <div :class="['fold-wrap', 'fold-summary-wrap', { open: st.rulesCollapsed }]">
+            <div class="fold-inner"><div class="muted small fold-summary" @click="toggleRules">{{ rulesSummary }}</div></div>
+          </div>
+          <div :class="['fold-wrap', { open: !st.rulesCollapsed }]">
+          <div class="fold-inner">
           <div class="tpl">
             <select v-model="st.templateName">
               <option value="">课例模板……</option>
@@ -395,11 +595,15 @@ createApp({
               比赛进行中不能改规则，先点「结束」</div>
             <button class="btn ghost full" @click="saveTemplate">把当前规则存为模板</button>
           </div>
+          </div>
+          </div>
         </div>
-        <div class="card">
+        <div class="card players-card">
           <h2>同学（{{ st.players.filter(p => p.online).length }} 人在线）</h2>
+          <!-- 列表在自己的区域里滚动：鼠标放在上面滚轮只滚列表，不带着整个页面跑 -->
+          <div class="players-scroll">
           <table class="players">
-            <tr><th>昵称</th><th>座位</th><th>{{ multi ? '组 · 智能体' : '智能体' }}</th><th></th></tr>
+            <thead><tr><th>昵称</th><th>座位</th><th>{{ multi ? '组 · 智能体' : '智能体' }}</th><th></th></tr></thead>
             <tr v-for="p in sortedPlayers" :key="p.id" :class="{ offline: !p.online }" draggable="true"
                 @dragstart="onDragStart($event, p)" title="可以把这一行拖到地图上的圆点上分配座位">
               <td><span :class="['online-dot', { yes: p.online }]"></span>{{ p.nickname }}<span v-if="!p.online" class="muted">（已离开）</span></td>
@@ -409,13 +613,15 @@ createApp({
                   <option value="" disabled>未分组</option>
                   <template v-for="g in st.groups" :key="g.group">
                     <option :value="g.group + ':'">{{ groupLabel(g.group) }}观战</option>
-                    <option v-for="i in g.num_agents" :value="g.group + ':' + (i - 1)">{{ groupLabel(g.group) }}{{ i }} 号</option>
+                    <option v-for="i in g.num_agents" :value="g.group + ':' + (i - 1)">{{ groupLabel(g.group) }}{{ i }} 号{{ ava(i - 1) }}</option>
                   </template>
                 </select>
               </td>
               <td><button class="x" title="移出课堂" @click="removePlayer(p)">✕</button></td>
             </tr>
           </table>
+          <p v-if="!st.players.length" class="muted small" style="padding:6px 2px">还没有同学加入</p>
+          </div>
           <button v-if="offlineCount" class="btn ghost" style="margin-top:10px;width:100%" @click="removeOffline">
             清除已离开的同学（{{ offlineCount }} 人）</button>
           <button class="btn ghost" style="margin-top:10px;width:100%" :disabled="status !== 'lobby'" @click="cmd('shuffle')">
@@ -423,35 +629,52 @@ createApp({
         </div>
       </div>
 
-      <div class="col">
+      <div class="col center">
         <div class="tabs">
-          <button :class="{ on: st.tab === 'class' }" @click="st.tab = 'class'">课堂</button>
-          <button :class="{ on: st.tab === 'workshop' }" @click="st.tab = 'workshop'">地图工坊</button>
-          <button :class="{ on: st.tab === 'review' }" @click="st.tab = 'review'">复盘</button>
+          <button :class="{ on: st.tab === 'class' }" @click="setTab('class')">课堂</button>
+          <button :class="{ on: st.tab === 'workshop' }" @click="setTab('workshop')">地图工坊</button>
+          <button :class="{ on: st.tab === 'review' }" @click="setTab('review')">复盘</button>
+          <button v-if="st.mode !== 'workshop'" class="tabs-tool" @click="toggleRight"
+                  :title="st.rightHidden ? '把控制、排行榜等卡片拿回来' : '把右边的卡片收到右侧，让出宽度'">
+            {{ st.rightHidden ? '◂ 显示右栏' : '收起右栏 ▸' }}</button>
         </div>
-        <!-- 每次切到复盘都重新挂载：读到最新的课堂记录 -->
-        <div v-if="st.tab === 'review'" class="card">
-          <ReviewPanel :rpc="rpc" :key-param="keyParam" @toast="toast"/>
+        <div v-show="st.tab === 'review'" class="card rv-main-card">
+          <ReviewMain :v="review" :active="st.mode === 'review'"/>
         </div>
-        <div v-show="st.tab === 'workshop'" class="card">
-          <MapWorkshop :rpc="rpc" :maps="st.maps" :can-use="status !== 'playing' && status !== 'paused'"
-                       @use="useWorkshopMap" @toast="toast"/>
+        <div v-show="st.tab === 'workshop'" class="card ws-canvas-card">
+          <WorkshopCanvas :w="workshop" :active="st.mode === 'workshop'"/>
         </div>
-        <div v-show="st.tab === 'class'" class="card">
-          <div v-if="multi" class="groupbar">
-            <button :class="['gb', { sel: st.overview }]" @click="st.overview = true">全部</button>
+        <div v-show="st.tab === 'class'" class="card class-card">
+          <div v-if="overviewOn" class="overview-bar">
+            <b>全部 {{ st.groups.length }} 组</b>
+            <span class="muted small">点任意一组进入 · 按 Esc 退出</span>
+            <button class="btn ghost small" @click="exitOverview()">退出总览</button>
+          </div>
+          <div v-else-if="multi" class="groupbar">
+            <button :class="['gb', { sel: st.overview }]" @click="enterOverview">全部</button>
             <button v-for="g in st.groups" :key="g.group" :class="['gb', g.status, { sel: !st.overview && st.sel === g.group }]"
-                    @click="st.sel = g.group; st.overview = false; nextTickMeasure()">
+                    @click="exitOverview(g.group)">
               {{ g.group_name }} <small>{{ STATUS_SHORT[g.status] }} {{ g.view.at_goal.filter(x => x).length }}/{{ g.num_agents }}</small>
             </button>
           </div>
-          <div v-if="multi && st.overview" class="thumbs">
-            <div v-for="g in st.groups" :key="g.group" class="thumb" @click="st.sel = g.group; st.overview = false; nextTickMeasure()">
+          <div v-if="overviewOn" ref="thumbsBox" :class="['thumbs', { shown: st.thumbsShown }]"
+               :style="{ gridTemplateColumns: 'repeat(' + thumbFit.cols + ', ' + (thumbFit.w + THUMB_PAD) + 'px)' }">
+            <div v-for="g in st.groups" :key="g.group" class="thumb" @click="exitOverview(g.group)">
               <div class="thumb-head"><b>{{ g.group_name }}</b>
                 <span :class="['badge', g.status]">{{ STATUS_SHORT[g.status] }}</span>
                 <span class="muted">第 {{ g.view.t }} 步 · 到达 {{ g.view.at_goal.filter(x => x).length }}/{{ g.num_agents }}</span></div>
-              <GridView :scene="thumbScene(g)"/>
+              <GridView :scene="thumbScene(g)" :style="{ width: thumbFit.w + 'px' }"/>
             </div>
+          </div>
+          <!-- 总览底部的控制栏：两侧卡片收起后，开始 / 暂停 / 结算 / 结束仍然够得着（作用于所有组） -->
+          <div v-if="overviewOn" :class="['ov-controls', { shown: st.thumbsShown }]">
+            <span :class="['badge', status]">{{ STATUS[status] }}</span>
+            <button class="btn ok" :disabled="status !== 'lobby'" @click="cmd('start')">▶ 开始</button>
+            <button v-if="status !== 'paused'" class="btn ghost" :disabled="status !== 'playing'" @click="cmd('pause')">⏸ 暂停</button>
+            <button v-else class="btn" @click="cmd('resume')">▶ 继续</button>
+            <button class="btn ghost" :disabled="status !== 'playing'" @click="cmd('step_now')" title="所有组都不等倒计时，马上结算这一步">
+              ⏭ 全部立即结算</button>
+            <button class="btn danger" :disabled="status === 'finished'" @click="cmd('end')">■ 结束</button>
           </div>
           <template v-else>
           <div v-if="r.ai_hint" class="ai-hint">🤖 {{ r.ai_hint }}</div>
@@ -480,24 +703,32 @@ createApp({
             <span><i style="background:#00a3b4"></i>交换视野</span>
             <span><i style="background:var(--c3)"></i>AI 通信</span>
             <span>带光圈 = 在线学生控制</span>
+            <span v-if="simpleMode">编号旁的动物 = 学生页上看到的头像</span>
           </div>
           </template>
         </div>
       </div>
 
-      <div class="col">
-        <div class="card">
-          <h2>控制</h2>
+      <div v-show="st.mode !== 'workshop' && !st.rightHidden" class="col side right">
+        <div class="stack">
+        <div ref="ctrlCard" class="card stack-top">
+          <h2 class="with-tool">控制
+            <button class="stack-btn" @click="toggleStack" :title="st.stepStacked ? '展开下面的卡片' : '把本步、通信、结果卡片叠到控制卡片后面'">
+              {{ st.stepStacked ? '展开 ▾' : '叠起 ▴' }}</button>
+          </h2>
           <div class="controls">
             <button class="btn ok" :disabled="status !== 'lobby'" @click="cmd('start')">▶ 开始</button>
             <button v-if="status !== 'paused'" class="btn ghost" :disabled="status !== 'playing'" @click="cmd('pause')">⏸ 暂停</button>
             <button v-else class="btn" @click="cmd('resume')">▶ 继续</button>
-            <button class="btn ghost" :disabled="r.status !== 'playing'" @click="multi ? cmd('step_now', { group: st.sel }) : cmd('step_now')">
-              ⏭ 立即结算{{ multi ? '（' + r.group_name + '）' : '' }}</button>
+            <button class="btn ghost" :disabled="r.status !== 'playing'" @click="multi ? cmd('step_now', { group: st.sel }) : cmd('step_now')"
+                    :title="multi ? '只结算正在看的' + r.group_name : '不等倒计时，马上结算这一步'">
+              ⏭ {{ multi ? '结算本组' : '立即结算' }}</button>
             <button class="btn danger" :disabled="status === 'finished'" @click="cmd('end')">■ 结束</button>
           </div>
         </div>
-        <div class="card">
+        <div :class="['card', 'stack-under', { stacked: st.stepStacked }]" :style="underStyle('step')"
+             @click="st.stepStacked && toggleStack()">
+          <div class="stack-body" :ref="(el) => setBody('step', el)">
           <h2>本步{{ multi ? ' · ' + r.group_name : '' }}</h2>
           <div class="stat"><span>步数</span><b>{{ r.view.t + (r.status === 'finished' ? 0 : 1) }} / {{ r.settings.max_steps }}</b></div>
           <div class="stat"><span>倒计时</span><b>{{ remaining == null ? '—' : Math.ceil(remaining / 1000) + ' 秒' }}</b></div>
@@ -507,16 +738,35 @@ createApp({
           <div class="chips" style="margin-top:8px">
             <span v-for="(pid, a) in r.seats" :key="a" :class="['chip', { done: r.choices[a] !== undefined }]">
               <span class="sw" :style="{ background: agentColor(Number(a)) }"></span>
-              {{ Number(a) + 1 }} 号 {{ (playerOfAgent[a] || {}).nickname }} {{ r.choices[a] !== undefined ? icon(r.choices[a]) : '…' }}
+              {{ Number(a) + 1 }} 号{{ ava(Number(a)) }} {{ (playerOfAgent[a] || {}).nickname }} {{ r.choices[a] !== undefined ? icon(r.choices[a]) : '…' }}
             </span>
           </div>
+          </div>
+          <!-- 叠起时露在上一张卡片下沿的那一条 -->
+          <div class="peek">本步：第 {{ r.view.t + (r.status === 'finished' ? 0 : 1) }} 步 · 已提交 {{ r.progress.submitted }}/{{ r.progress.total }} · 到达 {{ r.view.at_goal.filter(x => x).length }}/{{ r.num_agents }} ▾</div>
         </div>
-        <div class="card" v-if="r.settings.comm_enabled && status !== 'lobby'">
+        <div v-if="stackKeys.includes('comm')" :class="['card', 'stack-under', { stacked: st.stepStacked }]" :style="underStyle('comm')"
+             @click="st.stepStacked && toggleStack()">
+          <div class="stack-body" :ref="(el) => setBody('comm', el)">
           <h2>本步通信（{{ (r.comm_events || []).length }}）</h2>
           <div v-if="!(r.comm_events || []).length" class="muted" style="font-size:14px">还没有人通信</div>
           <div class="commlog">
             <div v-for="(e, i) in (r.comm_events || [])" :key="i">{{ eventText(e) }}</div>
           </div>
+          </div>
+          <div class="peek">本步通信：{{ (r.comm_events || []).length ? (r.comm_events || []).length + ' 条' : '还没有' }} ▾</div>
+        </div>
+        <div v-if="stackKeys.includes('result')" :class="['card', 'stack-under', { stacked: st.stepStacked }]" :style="underStyle('result')"
+             @click="st.stepStacked && toggleStack()">
+          <div class="stack-body" :ref="(el) => setBody('result', el)">
+          <h2>本局结果{{ multi ? ' · ' + r.group_name : '' }}</h2>
+          <div class="stat"><span>全员到达 CSR</span><b>{{ r.metrics.CSR === 1 ? '是' : '否' }}</b></div>
+          <div class="stat"><span>到达比例 ISR</span><b>{{ Math.round(r.metrics.ISR * 100) }}%</b></div>
+          <div class="stat"><span>总步数 SoC</span><b>{{ r.metrics.SoC }}</b></div>
+          <div class="stat"><span>用时 makespan</span><b>{{ r.metrics.makespan }}</b></div>
+          </div>
+          <div class="peek">本局结果：{{ r.metrics.CSR === 1 ? '全员到达' : '到达 ' + Math.round(r.metrics.ISR * 100) + '%' }} · SoC {{ r.metrics.SoC }} · 用时 {{ r.metrics.makespan }} ▾</div>
+        </div>
         </div>
         <div class="card">
           <h2>排行榜</h2>
@@ -533,13 +783,6 @@ createApp({
             <input type="checkbox" :checked="st.screenLive" @change="setScreenLive($event.target.checked)">
             比赛中投屏也显示各组全图（迷雾课不要开）</label>
           <a class="small" href="/screen" target="_blank">打开投屏页 ↗</a>
-        </div>
-        <div class="card" v-if="r.metrics">
-          <h2>本局结果{{ multi ? ' · ' + r.group_name : '' }}</h2>
-          <div class="stat"><span>全员到达 CSR</span><b>{{ r.metrics.CSR === 1 ? '是' : '否' }}</b></div>
-          <div class="stat"><span>到达比例 ISR</span><b>{{ Math.round(r.metrics.ISR * 100) }}%</b></div>
-          <div class="stat"><span>总步数 SoC</span><b>{{ r.metrics.SoC }}</b></div>
-          <div class="stat"><span>用时 makespan</span><b>{{ r.metrics.makespan }}</b></div>
         </div>
       </div>
     </div>

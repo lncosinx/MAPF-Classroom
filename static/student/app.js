@@ -1,6 +1,6 @@
 // 学生端：加入 → 等待老师开始 → 每步选一个方向（倒计时内可以改）→ 终局看结果。
 // 服务器是唯一权威：这里只画服务端下发的视野，不做任何本地推演。
-import { Connection, store, tabStore, ACTIONS, MESSAGES, agentColor } from "/static/shared/ws.js";
+import { Connection, store, tabStore, ACTIONS, MESSAGES, agentAvatar, checkVersion } from "/static/shared/ws.js";
 import { GridView } from "/static/shared/grid-renderer.js";
 
 const { createApp, reactive, computed, onMounted, onBeforeUnmount } = Vue;
@@ -20,6 +20,8 @@ createApp({
       commTarget: null,   // 正在和谁通信（打开了操作卡）
       groupName: null,    // 分组比拼时的组名
       canReview: false, review: null, rt: 0,   // 赛后复盘：服务端给的自己的记录、当前看到第几步
+      // 动效与"我的统计"：都由前端根据自己收到的视野逐步推出来，不需要服务端新字段
+      blocked: false, arrived: false, flash: false, confetti: [], stats: { moves: 0, waits: 0, blocked: 0 },
     });
     let toastTimer = null;
     const showToast = (m) => { st.toast = m; clearTimeout(toastTimer); toastTimer = setTimeout(() => (st.toast = ""), 2200); };
@@ -30,13 +32,15 @@ createApp({
     }
     function onMessage(m) {
       if (m.type === "welcome") {
+        checkVersion(m.version);
         st.joined = true; st.player = m.player; tabStore.set("mapf.token", m.token);
       } else if (m.type === "state") {
+        const wasFinished = st.status === "finished";
         st.status = m.status; st.uiMode = m.ui_mode || st.uiMode;
         if ("group_name" in m) st.groupName = m.group_name;
         st.seated = m.seated !== false;
         if (m.view) {
-          if (!st.view || st.view.t !== m.view.t) { st.myChoice = null; st.commTarget = null; }
+          if (!st.view || st.view.t !== m.view.t) { onNewStep(st.view, m.view, st.myChoice); st.myChoice = null; st.commTarget = null; }
           st.view = m.view;
           // 操作卡对象不在范围内了就关掉
           if (st.commTarget != null && !m.view.contacts.some((c) => c.agent === st.commTarget)) st.commTarget = null;
@@ -46,9 +50,12 @@ createApp({
         st.countdownMs = m.countdown_ms ?? null; st.receivedAt = performance.now();
         if (m.countdown_total_ms) st.countdownTotal = m.countdown_total_ms;
         if (m.max_steps) st.maxSteps = m.max_steps;
-        if (m.status === "finished") { st.metrics = m.metrics; st.atGoal = !!m.at_goal; st.canReview = !!m.can_review; }
+        if (m.status === "finished") {
+          if (!wasFinished && m.at_goal && simple.value) burst();     // 刚结束且在终点：再撒一次彩带
+          st.metrics = m.metrics; st.atGoal = !!m.at_goal; st.canReview = !!m.can_review;
+        }
         if (m.status !== "finished") { st.canReview = false; st.review = null; }
-        if (m.status === "lobby") { st.metrics = null; st.reveal = null; st.view = null; }
+        if (m.status === "lobby") { st.metrics = null; st.reveal = null; st.view = null; st.stats = { moves: 0, waits: 0, blocked: 0 }; }
       } else if (m.type === "progress") {
         st.progress = { submitted: m.submitted, total: m.total };
         if (st.view && m.t === st.view.t) st.myChoice = m.my_choice;
@@ -65,6 +72,32 @@ createApp({
         showToast(m.message);
       }
     }
+    // ---- 每一步开始：判断上一步是被挡、停下还是走了；到达终点撒彩带；地图闪一下提醒该走了
+    const simple = computed(() => st.uiMode === "simple");
+    function onNewStep(prev, cur, lastChoice) {
+      st.blocked = false; st.arrived = false;
+      if (!prev || cur.t === 0 || prev.agent !== cur.agent) { st.stats = { moves: 0, waits: 0, blocked: 0 }; }
+      else if (cur.t === prev.t + 1) {
+        const moved = prev.pos[0] !== cur.pos[0] || prev.pos[1] !== cur.pos[1];
+        if (moved) st.stats.moves++;
+        else if (lastChoice != null && lastChoice !== 0) {
+          st.stats.blocked++; st.blocked = true;
+          showToast(simple.value ? "✋ 被挡住了，换个方向试试" : "被挡住了，换个方向或等一等");
+        } else st.stats.waits++;
+        if (!prev.at_goal && cur.at_goal) { st.arrived = true; if (simple.value) burst(); }
+      }
+      st.flash = true; setTimeout(() => (st.flash = false), 600);
+    }
+    const CONFETTI_COLORS = ["#c1433c", "#2e6f9e", "#00b9c8", "#0ea08c", "#f2b705", "#8F7B66", "#e0a030"];
+    function burst() {
+      st.confetti = Array.from({ length: 40 }, (_, i) => ({
+        left: Math.random() * 100, delay: Math.random() * 0.4, dur: 1.4 + Math.random() * 0.8,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length] }));
+      setTimeout(() => (st.confetti = []), 2400);
+    }
+    // 简洁模式用动物称呼同伴，进阶模式用编号
+    const who = (j) => (simple.value ? agentAvatar(j) : `${j + 1} 号`);
+
     function connect() {
       conn = new Connection("/ws/student", {
         onMessage, onOpen: sendJoin,
@@ -156,9 +189,12 @@ createApp({
       for (const a of v.agents) others.set(a.agent, a.pos);
       const [pr, pc] = v.pos;
       const contactSet = new Set(contacts.value.map((c) => c.agent));
+      const emo = simple.value;
       const agents = [...others].map(([id, p]) => ({ id, r: p[0], c: p[1], color: "var(--other)", label: String(id + 1),
+                                                     emoji: emo ? agentAvatar(id) : null,
                                                      contact: contactSet.has(id) && st.status === "playing" }));
-      agents.push({ id: v.agent, r: pr, c: pc, color: "var(--self)", self: true });
+      agents.push({ id: v.agent, r: pr, c: pc, color: "var(--self)", self: true, emoji: emo ? agentAvatar(v.agent) : null,
+                    shake: st.blocked });
       // 消息气泡：本步收到的、发送者看得见的，每人只显示最新一条
       const latest = new Map();
       for (const m of (v.comm ? v.comm.inbox : [])) latest.set(m.from, m);
@@ -170,7 +206,8 @@ createApp({
       const circles = v.comm && st.status === "playing" ? [{ r: pr, c: pc, radius: v.comm.radius, color: "var(--contact)" }] : [];
       const sharedBoxes = v.shared.map((s) => ({ box: s.box, color: "var(--contact)" }));
       const goals = [];
-      if (v.goal) goals.push({ id: v.agent, r: v.goal[0], c: v.goal[1], color: "var(--self)", self: true });
+      if (v.goal) goals.push({ id: v.agent, r: v.goal[0], c: v.goal[1], color: "var(--self)", self: true, arrived: st.arrived,
+                               emoji: emo ? agentAvatar(v.agent) : null });
       else if (v.goal_proj) goals.push({ id: v.agent, r: v.goal_proj[0], c: v.goal_proj[1], color: "var(--self)", self: true, proj: true });
       const arrows = [];
       if (st.myChoice != null && st.myChoice !== 0) arrows.push({ r: pr, c: pc, action: st.myChoice, color: "var(--self)", dashed: true, opacity: 0.55, len: 0.9 });
@@ -183,7 +220,7 @@ createApp({
           if (v.legal[a.id] && !occ.has(r + "," + c)) clickCells.push({ r, c });
         });
       }
-      return { H: v.H, W: v.W, cells: cells.map((r) => r.join("")), agents, goals, arrows, bubbles, circles, sharedBoxes,
+      return { H: v.H, W: v.W, cells: cells.map((r) => r.join("")), agents, goals, arrows, bubbles, circles, sharedBoxes, stepKey: v.t,
                box: v.radius == null ? null : v.box, clickable: st.status === "playing", clickCells };
     });
     function onCell(r, c) {
@@ -218,7 +255,9 @@ createApp({
     const myStats = computed(() => (st.review && st.review.teaching[0]) || null);
     const pctTxt = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
 
-    return { askReview, rstep, reviewScene, myStats, pctTxt, st, phase, choose, scene, onCell, remainingMs, ring, PAD, ACTIONS, icon, join,
+    const stars = computed(() => (!st.metrics ? "" : st.metrics.CSR === 1 ? "★★★" : st.atGoal ? "★★☆" : "★☆☆"));
+    const lowTime = computed(() => st.status === "playing" && remainingMs.value != null && remainingMs.value <= 5000);
+    return { simple, who, stars, lowTime, agentAvatar, askReview, rstep, reviewScene, myStats, pctTxt, st, phase, choose, scene, onCell, remainingMs, ring, PAD, ACTIONS, icon, join,
              contacts, comm, openComm, requestView, answerView, sendMsg, budgetDots, sharedWith, msgLine, MESSAGES };
   },
   template: `
@@ -249,20 +288,21 @@ createApp({
 
     <div v-else-if="phase === 'play'">
       <div class="top">
-        <div class="me"><span class="dot"></span>{{ st.player.nickname }}</div>
+        <div v-if="simple" class="me big-me">你是 <span class="avatar">{{ agentAvatar(st.view.agent) }}</span></div>
+        <div v-else class="me"><span class="dot"></span>{{ st.player.nickname }}</div>
         <span v-if="st.groupName" class="badge">{{ st.groupName }}</span>
         <span :class="['badge', st.status]">{{ st.status === 'paused' ? '暂停中' : '进行中' }}</span>
         <span v-if="st.uiMode === 'advanced'" class="muted">第 {{ st.view.t + 1 }} 步 / 最多 {{ st.maxSteps }} 步</span>
-        <span v-if="st.view.at_goal" class="badge playing">🏁 你在终点上</span>
+        <span v-if="st.view.at_goal" class="badge playing">🏁 {{ simple ? '到终点啦' : '你在终点上' }}</span>
       </div>
       <div class="play">
-        <div class="card map-card">
+        <div :class="['card', 'map-card', { flash: st.flash }]">
           <GridView :scene="scene" @cell="onCell" @agent="openComm"/>
-          <p v-if="st.view.goal_proj" class="hint muted">灰色空心小旗只是方向标记：你的终点在这个方向、视野外面（标记可能画在墙上或别人身上）</p>
+          <p v-if="st.view.goal_proj" class="hint muted">{{ simple ? '虚线小旗：终点在这个方向' : '灰色空心小旗只是方向标记：你的终点在这个方向、视野外面（标记可能画在墙上或别人身上）' }}</p>
         </div>
         <div class="side">
           <div v-if="st.status === 'paused'" class="paused-banner">老师暂停了，先想一想</div>
-          <div class="card timer">
+          <div :class="['card', 'timer', { low: lowTime }]">
             <svg viewBox="0 0 76 76">
               <circle cx="38" cy="38" r="30" fill="none" stroke="var(--line)" stroke-width="7"/>
               <circle cx="38" cy="38" r="30" fill="none" :stroke="ring.low ? 'var(--danger)' : 'var(--accent)'" stroke-width="7"
@@ -271,8 +311,14 @@ createApp({
                 {{ remainingMs == null ? '' : Math.ceil(remainingMs / 1000) }}</text>
             </svg>
             <div>
-              <div class="num">{{ st.myChoice == null ? '请选择方向' : '已选 ' + ACTIONS[st.myChoice].icon }}</div>
-              <div class="muted">等待队友 {{ st.progress.submitted }}/{{ st.progress.total }}</div>
+              <template v-if="simple">
+                <div class="num">{{ st.myChoice == null ? '👉 选一个方向' : '✅ 选好了 ' + (st.myChoice === 0 ? '停' : ACTIONS[st.myChoice].icon) }}</div>
+                <div class="muted">队友选好了 {{ st.progress.submitted }}/{{ st.progress.total }}</div>
+              </template>
+              <template v-else>
+                <div class="num">{{ st.myChoice == null ? '请选择方向' : '已选 ' + ACTIONS[st.myChoice].icon }}</div>
+                <div class="muted">等待队友 {{ st.progress.submitted }}/{{ st.progress.total }}</div>
+              </template>
             </div>
           </div>
           <div class="card">
@@ -288,7 +334,7 @@ createApp({
           </div>
           <!-- 收到的交换视野请求 -->
           <div v-for="j in (comm ? comm.requests_in : [])" :key="'rq' + j" class="card request">
-            <div>👀 <b>{{ j + 1 }} 号</b>想和你交换视野</div>
+            <div>👀 <b>{{ who(j) }}</b> 想和你互相看看</div>
             <div class="row">
               <button class="btn ok" @click="answerView(j, true)">同意</button>
               <button class="btn ghost" @click="answerView(j, false)">拒绝</button>
@@ -297,43 +343,42 @@ createApp({
           <!-- 通信 -->
           <div v-if="comm" class="card comm">
             <div class="comm-head">
-              <b>通信</b>
-              <span v-if="budgetDots != null" class="dots" :title="'这一步还能通信 ' + budgetDots + ' 次'">
-                <i v-for="k in budgetDots" :key="k"></i><span v-if="budgetDots === 0" class="muted">本步次数用完</span>
+              <b>💬 和队友说话</b>
+              <span v-if="budgetDots != null" class="dots" :title="'这一步还能说 ' + budgetDots + ' 次'">
+                <i v-for="k in budgetDots" :key="k"></i><span v-if="budgetDots === 0" class="muted">这一步不能再说了</span>
               </span>
             </div>
-            <div v-if="!contacts.length" class="muted small">通信范围内没有队友</div>
+            <div v-if="!contacts.length" class="muted small">附近没有队友</div>
             <div class="chips">
               <button v-for="c in contacts" :key="c.agent" :class="['chip', { on: st.commTarget === c.agent }]"
                       :disabled="st.status !== 'playing'" @click="openComm(c.agent)">
-                {{ c.agent + 1 }} 号
+                {{ who(c.agent) }}
                 <span v-if="!c.visible" class="tag">看不见</span>
-                <span v-if="c.ai_controlled" class="tag">AI</span>
-                <span v-if="sharedWith.includes(c.agent)" class="tag ok">已共享</span>
-                <span v-else-if="comm.requests_out.includes(c.agent)" class="tag">等同意</span>
-                <span v-else-if="comm.rejected_by.includes(c.agent)" class="tag no">拒绝了</span>
+                <span v-if="c.ai_controlled" class="tag">电脑</span>
+                <span v-if="sharedWith.includes(c.agent)" class="tag ok">看到了</span>
+                <span v-else-if="comm.requests_out.includes(c.agent)" class="tag">等回答</span>
+                <span v-else-if="comm.rejected_by.includes(c.agent)" class="tag no">不同意</span>
               </button>
             </div>
-            <div v-if="contacts.some(c => !c.visible) && st.uiMode === 'advanced'" class="muted small">
-              看不见的同伴也能联系</div>
+            <div v-if="contacts.some(c => !c.visible)" class="muted small">看不见的队友也能喊话</div>
             <div v-if="st.commTarget != null" class="panel">
-              <div class="small"><b>和 {{ st.commTarget + 1 }} 号</b>
+              <div class="small"><b>和 {{ who(st.commTarget) }}</b>
                 <span v-if="(contacts.find(c => c.agent === st.commTarget) || {}).ai_controlled" class="muted">
-                  （AI 队友：会和你交换视野，但不读消息）</span></div>
+                  {{ simple ? '（电脑队友听不懂说话）' : '（电脑队友：会给你看它看到的，但听不懂说话）' }}</span></div>
               <button v-if="comm.view_exchange" class="btn full"
                       :disabled="sharedWith.includes(st.commTarget) || comm.requests_out.includes(st.commTarget) || budgetDots === 0"
-                      @click="requestView(st.commTarget)">👀 交换视野</button>
+                      @click="requestView(st.commTarget)">👀 互相看看</button>
               <div class="msgs">
                 <button v-for="k in comm.kinds" :key="k" class="msg" :disabled="budgetDots === 0"
                         :title="MESSAGES[k].text" @click="sendMsg(st.commTarget, k)">
                   <span class="ic">{{ MESSAGES[k].icon }}</span>
-                  <span v-if="st.uiMode === 'advanced'">{{ MESSAGES[k].text }}</span>
+                  <span>{{ MESSAGES[k].text }}</span>
                 </button>
               </div>
             </div>
             <div v-if="comm.inbox.length" class="log">
               <div v-for="(m, i) in comm.inbox" :key="'in' + i">
-                <b>{{ m.from + 1 }} 号</b>：{{ st.uiMode === 'advanced' ? msgLine(m) : MESSAGES[m.kind].icon }}
+                <b>{{ who(m.from) }}</b>：{{ msgLine(m) }}
                 <span v-if="m.t !== st.view.t" class="muted small">（上一步发的）</span>
               </div>
             </div>
@@ -345,6 +390,17 @@ createApp({
               <div class="col"><div class="lbl">专家</div><div :class="['act', { same: st.reveal.expert === st.reveal.you }]">{{ icon(st.reveal.expert) }}</div></div>
               <div class="col"><div class="lbl">AI</div><div :class="['act', { same: st.reveal.ai === st.reveal.you }]">{{ icon(st.reveal.ai) }}</div></div>
             </div>
+            <div v-if="!simple && st.reveal.ai_probs" class="probbars">
+              <div class="lbl muted small">AI 对每个方向的把握</div>
+              <div v-for="(p, k) in st.reveal.ai_probs" :key="k" class="pb">
+                <span class="pi">{{ ACTIONS[k].icon }}</span><span class="pt"><i :style="{ width: Math.round(p * 100) + '%' }"></i></span>
+                <span class="pv">{{ Math.round(p * 100) }}%</span>
+              </div>
+            </div>
+          </div>
+          <div v-if="!simple" class="card mystats">
+            <div class="muted small">我的统计</div>
+            <div>走了 <b>{{ st.stats.moves }}</b> 步 · 停了 <b>{{ st.stats.waits }}</b> 次 · 被挡 <b>{{ st.stats.blocked }}</b> 次</div>
           </div>
         </div>
       </div>
@@ -354,6 +410,7 @@ createApp({
       <div class="card join">
         <div class="big">{{ st.atGoal ? '🎉' : '🏁' }}</div>
         <h1>{{ st.atGoal ? '你到达了终点！' : '本局结束' }}</h1>
+        <div v-if="simple && st.metrics" class="stars-big">{{ stars }}</div>
         <p class="muted">{{ st.metrics && st.metrics.CSR === 1 ? '全队都到了，太棒了！' : '还有队友没到终点，下次再努力' }}</p>
         <div v-if="st.metrics" class="metrics">
           <div><b>{{ Math.round(st.metrics.ISR * 100) }}%</b>到达比例</div>
@@ -390,6 +447,10 @@ createApp({
       </div>
     </div>
 
-    <div v-if="st.toast" class="toast">{{ st.toast }}</div>
+    <div v-if="st.toast" :class="['toast', { 'toast-big': simple }]">{{ st.toast }}</div>
+    <div v-if="st.confetti.length" class="confetti">
+      <i v-for="(c, k) in st.confetti" :key="k"
+         :style="{ left: c.left + '%', background: c.color, animationDelay: c.delay + 's', animationDuration: c.dur + 's' }"></i>
+    </div>
   </div>`,
 }).mount("#app");

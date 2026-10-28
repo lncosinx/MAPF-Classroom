@@ -487,3 +487,30 @@ def test_review_export_and_student_review(client):
     assert r3.status_code == 200 and r3.headers["content-type"] == "image/svg+xml" and "<svg" in r3.text
     assert client.get(f"/api/export/{sess}/all.svg?key={KEY}").status_code == 400
     assert client.get(f"/api/export/..%2F..%2Fx/{rid}.csv?key={KEY}").status_code in (400, 404)
+
+
+def test_version_sent_for_auto_reload(client):
+    """服务重启后前端靠 version 发现自己是旧代码并自动刷新：welcome / 老师快照 / 投屏首包都要带同一个 version。"""
+    with client.websocket_connect("/ws/student") as ws:
+        ws.send_json({"type": "join", "nickname": "版本", "seat": "1"})
+        v1 = recv_until(ws, lambda m: m["type"] == "welcome")["version"]
+    with client.websocket_connect(f"/ws/teacher?key={KEY}") as t:
+        v2 = recv_until(t, lambda m: m["type"] == "classroom")["version"]
+    with client.websocket_connect("/ws/screen") as sc:
+        v3 = sc.receive_json()["version"]
+    assert v1 and v1 == v2 == v3
+
+
+def test_layout_columns_not_forced_visible():
+    """老师页按模式隐藏栏目（.ws-only / .class-only / 全部展示）靠 display:none。
+    别的规则若给 .col 加更高优先级的 display（曾写过 `.layout > .col.side.left { display: flex }`），
+    隐藏就会失效：课堂里冒出工坊工具栏、三栏错位。"""
+    css = (STATIC / "teacher" / "teacher.css").read_text(encoding="utf-8")
+    pat = re.compile(r"([^{}]*\.col[^{}]*)\{[^}]*display\s*:\s*(?!none)[a-z-]+", re.M)
+    bad = [m.group(1).strip() for m in pat.finditer(css) if m.group(1).strip() != ".col"]
+    assert not bad, bad
+    # 布局的模式类（.layout.overview / .sides-out / .ws-mode / .rv-mode / .no-right / .right-out）不能再被裸写成规则：
+    # 曾有 M3 遗留的 `.workshop { display: flex }` 与同名模式类撞车，把整页栅格压成一列
+    for cls in ("overview", "sides-out", "ws-mode", "rv-mode", "no-right", "right-out"):
+        bare = re.findall(r"(?:^|[}\s,>])\." + re.escape(cls) + r"(?![\w-])", css, re.M)
+        assert not bare, f".{cls} 只能写成 .layout.{cls}"

@@ -367,7 +367,9 @@ class GroupRound:
                 await self.out.send_agent(i, {
                     "type": "reveal", "t": int(ctx.t), "you": int(acts[i]),
                     "expert": int(expert.actions[i]) if expert is not None else None,
-                    "ai": int(ctx.model.actions[i]), "timed_out": timed[i]})
+                    "ai": int(ctx.model.actions[i]), "timed_out": timed[i],
+                    # AI 动作概率条（进阶模式）。和其他建议一样只在本步结算之后才发（不变式 8）
+                    "ai_probs": [round(float(x), 3) for x in ctx.model.probs[i]]})
         await self.out.send_teachers({"type": "resolved", "t": int(ctx.t), "actions": acts.tolist(),
                                       "controllers": controllers, "timed_out": timed})
         self.ctx = None

@@ -229,3 +229,25 @@ def test_spectators_get_status_updates():
     assert statuses[0] == "playing" and statuses[-1] == "finished"
     assert all(m["seated"] is False and "view" not in m for _, m in got)
     assert "metrics" in got[-1][1]
+
+
+@pytest.mark.parametrize("reveal", ["immediate", "teacher", "review"])
+def test_reveal_ai_probs_only_after_resolution(reveal):
+    """进阶模式的 AI 概率条：immediate 下 reveal 带 ai_probs（5 维、和为 1），且只在结算之后出现；
+    其他揭晓模式下学生收到的任何消息都没有 ai_probs。"""
+    async def go():
+        sink = Sink(); r = make_round(sink, reveal_mode=reveal)
+        await r.start()
+        await r.choose(11, 0, 0); await r.choose(12, 0, 0)
+        before = [m for msgs in sink.agent_msgs.values() for m in msgs]
+        await r.choose(13, 0, 0)            # 第三个人提交 -> 结算
+        after = [m for msgs in sink.agent_msgs.values() for m in msgs]
+        await r.end()
+        return before, after
+    before, after = run(go())
+    assert not any("ai_probs" in json.dumps(m) for m in before)
+    reveals = [m for m in after if m["type"] == "reveal"]
+    if reveal == "immediate":
+        assert reveals and all(len(m["ai_probs"]) == 5 and abs(sum(m["ai_probs"]) - 1) < 0.01 for m in reveals)
+    else:
+        assert not reveals and not any("ai_probs" in json.dumps(m) for m in after)

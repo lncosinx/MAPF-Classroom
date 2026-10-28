@@ -4,8 +4,24 @@
 .topbar .join { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .topbar .join img { width: 72px; height: 72px; }
 .topbar .url { font-size: 18px; font-weight: 700; color: var(--accent); }
-.layout { display: grid; grid-template-columns: 330px minmax(0, 1fr) 290px; gap: 16px; padding: 16px; align-items: start; }
+/* overflow-x: clip：两侧卡片往外滑时不撑出横向滚动条 */
+.layout { display: grid; grid-template-columns: 330px minmax(0, 1fr) 290px; gap: 16px; padding: 16px; align-items: start;
+  overflow-x: clip; }
 @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } }
+/* "全部"总览：两侧卡片保持原宽度向外滑出、淡出（不压窄内容）；看不见之后再一次性切成全宽 */
+.layout > .col.side { min-width: 0; transition: opacity 300ms ease, transform 300ms ease; }
+.layout.sides-out > .col.side { opacity: 0; pointer-events: none; }
+.layout.sides-out > .col.side.left { transform: translateX(-48px); }
+.layout.sides-out > .col.side.right, .layout.right-out > .col.side.right { transform: translateX(48px); }
+.layout.right-out > .col.side.right { opacity: 0; pointer-events: none; }
+.layout.overview { grid-template-columns: minmax(0, 1fr); }
+.layout.overview > .col.side { display: none; }
+/* 缩略图按最终宽度排好后再整体淡入 */
+.thumbs { opacity: 0; transform: scale(.98); transition: opacity 300ms ease, transform 300ms ease; }
+.thumbs.shown { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .layout > .col.side, .thumbs { transition: none; } }
+.overview-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.overview-bar .btn { margin-left: auto; }
 .col { display: flex; flex-direction: column; gap: 16px; }
 h2 { font-size: 16px; margin: 0 0 10px; }
 .form { display: grid; grid-template-columns: 110px 1fr; gap: 8px 10px; align-items: center; font-size: 14px; }
@@ -58,7 +74,6 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 .custom-map { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .players tr[draggable="true"] { cursor: grab; }
 /* 地图工坊 */
-.workshop { display: flex; flex-direction: column; gap: 10px; }
 .ws-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
 .ws-row input[type=number] { width: 4.5em; font: inherit; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 6px; }
 .ws-row input:not([type]) { font: inherit; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 6px; }
@@ -80,11 +95,14 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 .gb small { color: var(--muted); margin-left: 4px; }
 .gb.sel { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 .gb.finished { background: #f1f4fa; }
-.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.thumbs { display: grid; gap: 12px; justify-content: center; }   /* 列数和宽度由 JS 按窗口算（一屏放下所有组） */
 .thumb { border: 1.5px solid var(--line); border-radius: 10px; padding: 8px; cursor: pointer; }
 .thumb:hover { border-color: var(--accent); }
-.thumb-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; margin-bottom: 6px; }
-.board { display: flex; flex-direction: column; gap: 6px; }
+.thumb-head { display: flex; gap: 6px; align-items: center; font-size: 13px; margin-bottom: 6px; height: 22px;
+  white-space: nowrap; overflow: hidden; }
+/* 排行榜：限高、单独滚动（和同学列表一样，滚到头也不带动整个页面） */
+.board { display: flex; flex-direction: column; gap: 6px; max-height: min(360px, 45vh); overflow-y: auto;
+  overscroll-behavior: contain; padding-right: 2px; }
 .brow { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; align-items: center; font-size: 14px;
   padding: 6px 8px; border-radius: 8px; background: #f6f8fa; }
 .brow .rank { font-weight: 800; font-size: 18px; text-align: center; grid-row: span 2; }
@@ -105,3 +123,97 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 .rtable .act.same { color: var(--ok); }
 .probs { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; }
 .probs i { width: 7px; background: #e0a030; border-radius: 2px 2px 0 0; min-height: 1px; }
+/* 规则卡片可收起 */
+h2.fold { cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none; }
+h2.fold .fold-icon { color: var(--muted); font-size: 14px; display: inline-block; transition: transform 500ms ease; }
+h2.fold .fold-icon.closed { transform: rotate(-90deg); }
+.fold-summary { cursor: pointer; line-height: 1.6; }
+/* 折叠动画：外层 grid 行高 0fr ⇄ 1fr，内层 overflow:hidden；同时淡入淡出 */
+.fold-wrap { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden;
+  transition: grid-template-rows 500ms ease, opacity 380ms ease, visibility 0s linear 500ms; }
+.fold-wrap.open { grid-template-rows: 1fr; opacity: 1; visibility: visible;
+  transition: grid-template-rows 500ms ease, opacity 380ms ease 120ms, visibility 0s; }
+.fold-wrap > .fold-inner { overflow: hidden; min-height: 0; }
+@media (prefers-reduced-motion: reduce) { .fold-wrap, .fold-wrap.open, h2.fold .fold-icon { transition: none; } }
+/* 同学列表：限高、单独滚动；滚到头也不带动整个页面（overscroll-behavior），表头固定 */
+/* 左栏：min-height 由 JS 设为"到窗口底部"；规则卡片按内容高；同学卡片 flex 填满剩余空间（至少 260px），
+   里面的列表再 flex 填满卡片、单独滚动。规则卡片的折叠动画每一帧都会带动同学卡片同步变化 */
+.rules-card { flex: none; }
+.players-card { flex: 1 1 0; min-height: 260px; display: flex; flex-direction: column; }
+.players-card > h2, .players-card > .btn { flex: none; }
+.players-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line); border-radius: 8px; }
+.players-scroll thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+/* 叠卡片：本步 / 本步通信 / 本局结果依次滑到控制卡片后面，每张只在下沿露出一条摘要（0.5 s 过渡）。
+   往上拉的距离、封顶高度、越往后越小的缩放都由 JS（underStyle）按实测高度算好写在行内 */
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.stack-top { position: relative; z-index: 20; }
+.stack-under { position: relative; overflow: hidden; transform-origin: 50% 100%;
+  transition: margin-top 500ms ease, max-height 500ms ease, transform 500ms ease, box-shadow 500ms ease; }
+.stack-under.stacked { cursor: pointer; box-shadow: 0 2px 6px rgba(55, 71, 79, .12); }
+.stack-under .peek { display: none; }
+/* 叠起时只留摘要条，其余内容隐藏：露出的部分哪怕多几像素，也只是干净的卡片边缘 */
+.stack-under > *:not(.peek) { transition: opacity 300ms ease; }
+.stack-under.stacked > *:not(.peek) { opacity: 0; visibility: hidden; }
+.stack-under.stacked .peek { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 34px;
+  line-height: 34px; padding: 0 16px; font-size: 13px; color: var(--muted); background: var(--card);
+  border-radius: 0 0 var(--radius) var(--radius); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stack-under.stacked:hover .peek { color: var(--accent); }
+h2.with-tool { display: flex; align-items: center; }
+.stack-btn { margin-left: auto; border: 1.5px solid var(--line); background: #fff; border-radius: 8px; padding: 3px 10px;
+  font-size: 13px; color: var(--muted); white-space: nowrap; }
+.stack-btn:hover { color: var(--accent); border-color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .stack-under { transition: none; } }
+/* 总览底部控制栏（随缩略图一起淡入） */
+/* 进入：缩略图开始淡入 120 ms 后，从下方 40px 处缓缓升起（0.5 s）；退出：往下滑走，赶在缩略图淡出（250 ms）结束前离开 */
+.ov-controls { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 16px;
+  opacity: 0; transform: translateY(40px);
+  transition: opacity 220ms ease-in, transform 240ms ease-in; }
+.ov-controls.shown { opacity: 1; transform: none;
+  transition: opacity 500ms ease-out 120ms, transform 500ms cubic-bezier(.2, .8, .2, 1) 120ms; }
+@media (prefers-reduced-motion: reduce) { .ov-controls, .ov-controls.shown { transition: none; transform: none; } }
+.ov-controls .btn { min-width: 120px; padding: 10px 20px; }
+/* 各布局的栏宽。哪一栏显示由模板里的 v-show 决定（行内 display:none），这里只管宽度。
+   课堂：规则/同学 | 地图 | 控制/排行榜；收起右栏后中间变宽。
+   复盘：左栏放每个智能体的对比表，要宽一些；收起右栏后再宽一点。地图工坊：工具卡片 | 大画布（没有右栏） */
+.layout.no-right { grid-template-columns: 330px minmax(0, 1fr); }
+.layout.rv-mode { grid-template-columns: 500px minmax(0, 1fr) 290px; }
+.layout.rv-mode.no-right { grid-template-columns: 580px minmax(0, 1fr); }
+.layout.ws-mode { grid-template-columns: 340px minmax(0, 1fr); }
+@media (max-width: 1200px) { .layout.no-right, .layout.rv-mode, .layout.rv-mode.no-right, .layout.ws-mode { grid-template-columns: 1fr; } }
+.tabs-tool { margin-left: auto; align-self: center; border: 1.5px solid var(--line); background: #fff; border-radius: 8px;
+  padding: 4px 12px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.tabs-tool:hover { color: var(--accent); border-color: var(--accent); }
+/* 画布从右往左滑到位（工具卡片同时从左滑入）；切回课堂时课堂卡片淡入 */
+.layout.ws-mode .ws-canvas-card, .layout.rv-mode .rv-main-card { animation: ws-canvas-in 500ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes ws-canvas-in { from { opacity: 0; transform: translateX(60px); } to { opacity: 1; transform: none; } }
+.layout:not(.ws-mode) .class-card { animation: class-in 350ms ease both; }
+@keyframes class-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .layout.ws-mode .ws-canvas-card, .layout.rv-mode .rv-main-card, .layout:not(.ws-mode) .class-card { animation: none; } }
+.ws-tools { display: flex; flex-direction: column; gap: 16px; }
+.ws-tools .card { display: flex; flex-direction: column; gap: 10px; }
+.ws-tools h2 { margin: 0; }
+.ws-tools input, .ws-tools select { font: inherit; padding: 5px 8px; border: 1.5px solid var(--line); border-radius: 8px; }
+.ws-tools input[type=number] { width: 4.5em; }
+.ws-tools .full, .ws-tools .full-select { width: 100%; }
+.ws-field { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.ws-field input { flex: 1; }
+.ws-grid { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; font-size: 14px; }
+.ws-grid .pair { display: flex; align-items: center; gap: 6px; }
+.ws-btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+.ws-btns .btn { padding: 6px 12px; font-size: 14px; }
+.ws-toolbtns { display: flex; flex-direction: column; gap: 6px; }
+.ws-toolbtns .tool { text-align: left; padding: 8px 12px; font-size: 15px; }
+.ws-canvas-wrap { display: flex; flex-direction: column; gap: 10px; }
+.ws-canvas-head { display: flex; align-items: baseline; gap: 12px; }
+/* 工坊工具栏贴在顶栏下面、最高一屏、单独滚动（滚到头不带动整页）；画布不动，边编辑边找工具。
+   padding / 负 margin 给卡片阴影留出位置，不被 overflow 裁掉 */
+.layout.ws-mode > .ws-only, .layout.rv-mode > .rv-only { position: sticky; top: calc(var(--topbar-h, 92px) + 12px);
+  max-height: calc(100vh - var(--topbar-h, 92px) - 24px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 6px 4px 4px; margin: -4px -6px -4px -4px; scrollbar-width: thin; }
+/* 复盘左栏：表格在卡片里横向滚动（教学指标列多） */
+.rv-side { display: flex; flex-direction: column; gap: 16px; }
+.rv-side .card h2 { margin-top: 0; }
+.rtable-wrap { overflow-x: auto; }
+.rv-side .rtable { font-size: 13px; }
+.rv-side .rtable th, .rv-side .rtable td { padding: 5px 5px; white-space: nowrap; }
