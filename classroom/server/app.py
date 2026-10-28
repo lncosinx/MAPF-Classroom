@@ -25,8 +25,8 @@ from ..storage.db import Database
 from .hub import Hub
 from . import teacher_rpc
 from ..maps import library
-from .protocol import (Assign, Choose, Configure, Join, Remove, Rpc, SendMessage, StudentMsg, TeacherMsg,
-                       ViewAnswer, ViewRequest)
+from .protocol import (Assign, Choose, Configure, Join, Remove, Rpc, Screen, SendMessage, StudentMsg,
+                       TeacherMsg, ViewAnswer, ViewRequest)
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "static"
@@ -59,7 +59,6 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
         db = Database.for_new_session(data_dir) if use_db else None
         room = Classroom(hub, db=db, settings=settings)
         await room.open()
-        hub.player_of = lambda agent: room.round.player_of(agent)
         app.state.hub, app.state.room, app.state.db = hub, room, db
         yield
         if db is not None:
@@ -75,7 +74,7 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
         # 页面和 JS 模块每次都向服务器校验（ETag 命中时只回 304），升级代码后学生刷新即可拿到新版本
         resp = await call_next(request)
         path = request.url.path
-        if path.startswith("/static/") or path in ("/", "/teacher"):
+        if path.startswith("/static/") or path in ("/", "/teacher", "/screen"):
             resp.headers["Cache-Control"] = "no-cache"
         return resp
 
@@ -86,6 +85,10 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
     @app.get("/teacher")
     async def teacher_page():
         return FileResponse(STATIC / "teacher" / "index.html")
+
+    @app.get("/screen")
+    async def screen_page():
+        return FileResponse(STATIC / "screen" / "index.html")
 
     def join_url() -> str:
         return f"http://{lan_ip()}:{app.state.port}/"
@@ -125,17 +128,22 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
                     pass
             await ws.send_json({"type": "welcome", "token": player.token, "player": player.public()})
             await room.set_online(pid, True)
-            if room.round.agent_of(pid) is None:
-                await ws.send_json(room.round.spectator_state())
+            rr = room.round_of(pid)
+            if rr is None:
+                await ws.send_json(room.lobby_state())
+            elif rr.agent_of(pid) is None:
+                await ws.send_json(rr.spectator_state())
             while True:
                 try:
                     msg = StudentMsg.validate_python(await ws.receive_json())
                 except ValidationError:
                     await ws.send_json({"type": "error", "message": "消息格式不对"})
                     continue
-                r = room.round
+                r = room.round_of(pid)
                 err = None
-                if isinstance(msg, Choose):
+                if r is None and not isinstance(msg, Join):
+                    err = "你还没有分到组，等老师开始"
+                elif isinstance(msg, Choose):
                     err = await r.choose(pid, msg.t, msg.action)
                 elif isinstance(msg, ViewRequest):
                     err = await r.comm_view_request(pid, msg.t, msg.to)
@@ -151,6 +159,23 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
             if pid is not None and hub.students.get(pid) is ws:
                 del hub.students[pid]
                 await room.set_online(pid, False)
+
+    # ------------------------------------------------------------------ 投屏
+    @app.websocket("/ws/screen")
+    async def ws_screen(ws: WebSocket):
+        # 不鉴权：投屏数据由服务端裁剪，比赛中（老师没打开"显示全图"时）不含任何地图信息
+        await ws.accept()
+        hub: Hub = app.state.hub
+        room: Classroom = app.state.room
+        hub.screens.add(ws)
+        try:
+            await ws.send_json({**room.screen_state(), "join_url": join_url()})
+            while True:
+                await ws.receive_text()     # 投屏页只收不发；这里只为感知断开
+        except WebSocketDisconnect:
+            pass
+        finally:
+            hub.screens.discard(ws)
 
     # ------------------------------------------------------------------ 老师
     @app.websocket("/ws/teacher")
@@ -194,23 +219,24 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
 
 
 async def _teacher_command(room: Classroom, msg):
-    r = room.round
     if isinstance(msg, Configure):
         await room.configure(msg.settings)
     elif isinstance(msg, Assign):
-        await room.assign(msg.player_id, msg.agent)
+        await room.assign(msg.player_id, msg.agent, msg.group)
     elif isinstance(msg, Remove):
         await room.remove(msg.player_id)
     elif msg.type == "start":
         await room.start()
+    elif isinstance(msg, Screen):
+        await room.set_screen_live(msg.live_maps)
     elif msg.type == "pause":
-        await r.pause()
+        await room.pause()
     elif msg.type == "resume":
-        await r.resume()
+        await room.resume()
     elif msg.type == "step_now":
-        await r.resolve(timed_out=True)
+        await room.step_now(msg.group)
     elif msg.type == "end":
-        await r.end()
+        await room.end()
     elif msg.type == "shuffle":
         await room.shuffle()
     elif msg.type == "refresh":

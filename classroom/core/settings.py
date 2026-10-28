@@ -57,7 +57,14 @@ class RoundSettings(BaseModel):
     # 消息送达时机：now = 立即；next = 下一步开始时
     comm_delivery: Literal["now", "next"] = "now"
 
+    # 分组比拼（M4）：各组同一张图、同样的起终点，各自独立推进
+    num_groups: int = Field(default=1, ge=1, le=12)
+    # 排名方式：lex = CSR↓ → ISR↓ → SoC↑ → makespan↑（PLAN §6.4），或只看某一个指标
+    rank_by: Literal["lex", "CSR", "ISR", "SoC", "makespan"] = "lex"
+
     ui_mode: Literal["simple", "advanced"] = "advanced"
     model_variant: Literal["big", "small"] = "big"
     tta: bool = False
-    expert_time_limit: float = Field(default=0.2, gt=0.0, le=5.0)
+    # LaCAM 时限（秒）。LaCAM* 是 anytime 的，会把时限用满；而课堂规模上 0.01 s 和 0.2 s 的解质量几乎相同
+    # （20×20、16/32 体实测 SoC 差 ≤ 1%，无一失败，2026-10-28）。多组时专家串行排队，0.2 s 会让 8 组压测 p95 到 1.6 s
+    expert_time_limit: float = Field(default=0.03, gt=0.0, le=5.0)

@@ -24,9 +24,11 @@ createApp({
   components: { GridView, MapWorkshop },
   setup() {
     const st = reactive({
-      online: false, denied: false, players: [], maps: [], templates: [], defaults: null, round: null, joinUrl: "",
+      online: false, denied: false, players: [], maps: [], templates: [], defaults: null, joinUrl: "",
+      // 分组比拼：groups[g] 是第 g 组的 teacher_state（_rx = 收到时刻，用来算倒计时）；sel = 正在看的组
+      groups: [], sel: 0, overview: false, leaderboard: [], references: {}, screenLive: false,
       tab: "class", templateName: "",
-      form: null, dirty: false, pendingApply: false, applyError: "", toast: "", now: performance.now(), receivedAt: 0,
+      form: null, dirty: false, pendingApply: false, applyError: "", toast: "", now: performance.now(),
       show: { expert: true, ai: false, boxes: true, edges: false, range: false, links: true },
       // 地图缩放："fit" = 整张图缩进窗口；数字 = 相对地图框宽度的倍数（放大后在框内滚动）
       zoom: store.get("mapf.teacher.zoom") === null || store.get("mapf.teacher.zoom") === "fit"
@@ -36,24 +38,31 @@ createApp({
     let toastTimer = null;
     const toast = (m) => { st.toast = m; clearTimeout(toastTimer); toastTimer = setTimeout(() => (st.toast = ""), 3000); };
 
-    function setRound(r) {
+    function setGroup(g) {
       nextTick(measure);   // 地图框第一次出现、或上方内容高度变化后重新测量
-      st.round = r; st.receivedAt = performance.now();
-      if (!st.dirty) st.form = JSON.parse(JSON.stringify(r.settings));
+      st.groups[g.group] = { ...g, _rx: performance.now() };
+      if (g.group === 0 && !st.dirty) st.form = JSON.parse(JSON.stringify(g.settings));
     }
     function onMessage(m) {
       if (m.type === "classroom") {
         // 应用规则成功后服务端会推一份新的 classroom 快照；这时才把表单换成服务端的设置
         if (st.pendingApply) { st.pendingApply = false; st.dirty = false; st.applyError = ""; }
-        st.players = m.players; st.maps = m.maps; st.templates = m.templates; st.defaults = m.defaults; setRound(m.round);
+        st.players = m.players; st.maps = m.maps; st.templates = m.templates; st.defaults = m.defaults;
+        st.groups = [];
+        m.groups.forEach(setGroup);
+        if (st.sel >= st.groups.length) st.sel = 0;
+        st.leaderboard = m.leaderboard; st.references = m.references; st.screenLive = m.screen_live;
         if (m.join_url) st.joinUrl = m.join_url;
       } else if (m.type === "teacher_state") {
-        setRound(m);
-      } else if (m.type === "progress" && st.round) {
-        st.round.progress = { submitted: m.submitted, total: m.total };
-        st.round.choices = m.choices;
-      } else if (m.type === "comm_event" && st.round) {
-        if (st.round.view && m.event.t === st.round.view.t) st.round.comm_events.push(m.event);
+        setGroup(m);
+      } else if (m.type === "progress" && st.groups[m.group]) {
+        st.groups[m.group].progress = { submitted: m.submitted, total: m.total };
+        st.groups[m.group].choices = m.choices;
+      } else if (m.type === "comm_event" && st.groups[m.group]) {
+        const g = st.groups[m.group];
+        if (g.view && m.event.t === g.view.t) g.comm_events.push(m.event);
+      } else if (m.type === "leaderboard") {
+        st.leaderboard = m.rows; st.references = m.references;
       } else if (m.type === "resolved") {
         st.lastResolved = m;
       } else if (m.type === "rpc_result" || m.type === "rpc_error") {
@@ -132,10 +141,18 @@ createApp({
       const rc = cellFromEvent(ev, mapWrap.value, v.H, v.W);
       const agent = rc ? v.positions.findIndex((p) => p[0] === rc[0] && p[1] === rc[1]) : -1;
       if (agent < 0) { toast("要拖到地图上的某个圆点（智能体）上"); return; }
-      send({ type: "assign", player_id: pid, agent });
+      send({ type: "assign", player_id: pid, agent, group: st.sel });
     }
-    const cmd = (type) => send({ type });
-    const assign = (pid, v) => send({ type: "assign", player_id: pid, agent: v === "" ? null : Number(v) });
+    const cmd = (type, extra = {}) => send({ type, ...extra });
+    // 座位下拉框的值："组:智能体"，智能体为空表示在该组观战
+    const seatValue = (p) => (p.group == null ? "" : `${p.group}:${p.agent ?? ""}`);
+    function assign(pid, v) {
+      if (v === "") return;
+      const [g, a] = v.split(":");
+      send({ type: "assign", player_id: pid, group: Number(g), agent: a === "" ? null : Number(a) });
+    }
+    const groupLabel = (g) => (st.groups.length > 1 ? `第 ${g + 1} 组·` : "");
+    const setScreenLive = (v) => send({ type: "screen", live_maps: v });
     function removePlayer(p) {
       const tip = p.online ? `把在线的「${p.nickname}」移出课堂？他的页面会回到加入页。` : `移除已离开的「${p.nickname}」？`;
       if (confirm(tip)) send({ type: "remove", player_id: p.id });
@@ -150,8 +167,23 @@ createApp({
     onMounted(() => { raf = requestAnimationFrame(tick); });
     onBeforeUnmount(() => cancelAnimationFrame(raf));
 
-    const r = computed(() => st.round);
-    const status = computed(() => (r.value ? r.value.status : "lobby"));
+    const r = computed(() => st.groups[st.sel] || st.groups[0]);
+    // 整体状态（开始 / 暂停 / 结束 / 改规则都作用于所有组）：有组在进行就算进行中
+    const status = computed(() => {
+      const sts = new Set(st.groups.map((g) => g.status));
+      for (const s of ["playing", "paused", "lobby"]) if (sts.has(s)) return s;
+      return st.groups.length ? "finished" : "lobby";
+    });
+    const multi = computed(() => st.groups.length > 1);
+    const STATUS_SHORT = { lobby: "未开始", playing: "进行中", paused: "暂停", finished: "已结束" };
+    // "全部"视图里的缩略图
+    function thumbScene(g) {
+      const v = g.view;
+      return { H: v.H, W: v.W, cells: v.map,
+               agents: v.positions.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i) })),
+               goals: v.targets.map((p, i) => ({ id: i, r: p[0], c: p[1], color: agentColor(i) })) };
+    }
+    const fmtMetric = (m) => (m ? `CSR ${m.CSR === 1 ? "✓" : "✗"} · ISR ${Math.round(m.ISR * 100)}% · SoC ${m.SoC} · 用时 ${m.makespan}` : "");
     const agentOfPlayer = computed(() => {
       const m = {};
       if (r.value) for (const [a, p] of Object.entries(r.value.seats)) m[p] = Number(a);
@@ -162,10 +194,11 @@ createApp({
       if (r.value) for (const [a, p] of Object.entries(r.value.seats)) m[Number(a)] = st.players.find((x) => x.id === p);
       return m;
     });
+    const nextTickMeasure = () => nextTick(measure);
     const remaining = computed(() => {
       const ms = r.value && r.value.countdown_ms;
       if (ms == null) return null;
-      return status.value === "playing" ? Math.max(0, ms - (st.now - st.receivedAt)) : ms;
+      return r.value.status === "playing" ? Math.max(0, ms - (st.now - r.value._rx)) : ms;
     });
 
     const scene = computed(() => {
@@ -256,7 +289,7 @@ createApp({
       return e.type;
     }
 
-    return { toast, rpc, pickPreset, useWorkshopMap, currentTemplate, loadTemplate, saveTemplate, deleteTemplate,
+    return { nextTickMeasure, seatValue, groupLabel, setScreenLive, multi, STATUS_SHORT, thumbScene, fmtMetric, toast, rpc, pickPreset, useWorkshopMap, currentTemplate, loadTemplate, saveTemplate, deleteTemplate,
              onDragStart, onDropMap, eventText, zoomStep, setZoom, mapStyle, wrapStyle, zoomLabel, mapWrap, st, r, status, scene, remaining, OPTIONS, STATUS, applySettings, cmd, assign, agentOfPlayer,
              removePlayer, removeOffline, sortedPlayers, offlineCount, MESSAGES,
              playerOfAgent, agentColor, icon };
@@ -304,6 +337,14 @@ createApp({
             </select>
             <label>智能体数</label>
             <input type="number" min="1" max="64" v-model="st.form.num_agents" placeholder="用预设默认值">
+            <label>分组数</label>
+            <input type="number" min="1" max="12" v-model.number="st.form.num_groups">
+            <label>排名方式</label>
+            <select v-model="st.form.rank_by">
+              <option value="lex">综合（全员到达 → 到达比例 → 总步数 → 用时）</option>
+              <option value="CSR">只看是否全员到达</option><option value="ISR">只看到达比例</option>
+              <option value="SoC">只看总步数（少者胜）</option><option value="makespan">只看用时（少者胜）</option>
+            </select>
             <label>倒计时（秒）</label>
             <input type="number" min="3" max="300" v-model="st.form.countdown_sec">
             <label>最多步数</label>
@@ -357,15 +398,18 @@ createApp({
         <div class="card">
           <h2>同学（{{ st.players.filter(p => p.online).length }} 人在线）</h2>
           <table class="players">
-            <tr><th>昵称</th><th>座位</th><th>智能体</th><th></th></tr>
+            <tr><th>昵称</th><th>座位</th><th>{{ multi ? '组 · 智能体' : '智能体' }}</th><th></th></tr>
             <tr v-for="p in sortedPlayers" :key="p.id" :class="{ offline: !p.online }" draggable="true"
                 @dragstart="onDragStart($event, p)" title="可以把这一行拖到地图上的圆点上分配座位">
               <td><span :class="['online-dot', { yes: p.online }]"></span>{{ p.nickname }}<span v-if="!p.online" class="muted">（已离开）</span></td>
               <td>{{ p.seat }}</td>
               <td>
-                <select :value="agentOfPlayer[p.id] ?? ''" @change="assign(p.id, $event.target.value)" :disabled="status === 'finished'">
-                  <option value="">观战</option>
-                  <option v-for="i in r.num_agents" :value="i - 1">{{ i }} 号</option>
+                <select :value="seatValue(p)" @change="assign(p.id, $event.target.value)" :disabled="status === 'finished'">
+                  <option value="" disabled>未分组</option>
+                  <template v-for="g in st.groups" :key="g.group">
+                    <option :value="g.group + ':'">{{ groupLabel(g.group) }}观战</option>
+                    <option v-for="i in g.num_agents" :value="g.group + ':' + (i - 1)">{{ groupLabel(g.group) }}{{ i }} 号</option>
+                  </template>
                 </select>
               </td>
               <td><button class="x" title="移出课堂" @click="removePlayer(p)">✕</button></td>
@@ -373,7 +417,8 @@ createApp({
           </table>
           <button v-if="offlineCount" class="btn ghost" style="margin-top:10px;width:100%" @click="removeOffline">
             清除已离开的同学（{{ offlineCount }} 人）</button>
-          <button class="btn ghost" style="margin-top:10px;width:100%" :disabled="status !== 'lobby'" @click="cmd('shuffle')">随机分配座位</button>
+          <button class="btn ghost" style="margin-top:10px;width:100%" :disabled="status !== 'lobby'" @click="cmd('shuffle')">
+            {{ multi ? '随机分组并分配座位' : '随机分配座位' }}</button>
         </div>
       </div>
 
@@ -387,6 +432,22 @@ createApp({
                        @use="useWorkshopMap" @toast="toast"/>
         </div>
         <div v-show="st.tab === 'class'" class="card">
+          <div v-if="multi" class="groupbar">
+            <button :class="['gb', { sel: st.overview }]" @click="st.overview = true">全部</button>
+            <button v-for="g in st.groups" :key="g.group" :class="['gb', g.status, { sel: !st.overview && st.sel === g.group }]"
+                    @click="st.sel = g.group; st.overview = false; nextTickMeasure()">
+              {{ g.group_name }} <small>{{ STATUS_SHORT[g.status] }} {{ g.view.at_goal.filter(x => x).length }}/{{ g.num_agents }}</small>
+            </button>
+          </div>
+          <div v-if="multi && st.overview" class="thumbs">
+            <div v-for="g in st.groups" :key="g.group" class="thumb" @click="st.sel = g.group; st.overview = false; nextTickMeasure()">
+              <div class="thumb-head"><b>{{ g.group_name }}</b>
+                <span :class="['badge', g.status]">{{ STATUS_SHORT[g.status] }}</span>
+                <span class="muted">第 {{ g.view.t }} 步 · 到达 {{ g.view.at_goal.filter(x => x).length }}/{{ g.num_agents }}</span></div>
+              <GridView :scene="thumbScene(g)"/>
+            </div>
+          </div>
+          <template v-else>
           <div v-if="r.ai_hint" class="ai-hint">🤖 {{ r.ai_hint }}</div>
           <div class="toggles">
             <label><input type="checkbox" v-model="st.show.expert"> 专家箭头</label>
@@ -414,6 +475,7 @@ createApp({
             <span><i style="background:var(--c3)"></i>AI 通信</span>
             <span>带光圈 = 在线学生控制</span>
           </div>
+          </template>
         </div>
       </div>
 
@@ -424,13 +486,14 @@ createApp({
             <button class="btn ok" :disabled="status !== 'lobby'" @click="cmd('start')">▶ 开始</button>
             <button v-if="status !== 'paused'" class="btn ghost" :disabled="status !== 'playing'" @click="cmd('pause')">⏸ 暂停</button>
             <button v-else class="btn" @click="cmd('resume')">▶ 继续</button>
-            <button class="btn ghost" :disabled="status !== 'playing'" @click="cmd('step_now')">⏭ 立即结算</button>
+            <button class="btn ghost" :disabled="r.status !== 'playing'" @click="multi ? cmd('step_now', { group: st.sel }) : cmd('step_now')">
+              ⏭ 立即结算{{ multi ? '（' + r.group_name + '）' : '' }}</button>
             <button class="btn danger" :disabled="status === 'finished'" @click="cmd('end')">■ 结束</button>
           </div>
         </div>
         <div class="card">
-          <h2>本步</h2>
-          <div class="stat"><span>步数</span><b>{{ r.view.t + (status === 'finished' ? 0 : 1) }} / {{ r.settings.max_steps }}</b></div>
+          <h2>本步{{ multi ? ' · ' + r.group_name : '' }}</h2>
+          <div class="stat"><span>步数</span><b>{{ r.view.t + (r.status === 'finished' ? 0 : 1) }} / {{ r.settings.max_steps }}</b></div>
           <div class="stat"><span>倒计时</span><b>{{ remaining == null ? '—' : Math.ceil(remaining / 1000) + ' 秒' }}</b></div>
           <div class="stat"><span>已提交</span><b>{{ r.progress.submitted }} / {{ r.progress.total }}</b></div>
           <div class="stat"><span>到达目标</span><b>{{ r.view.at_goal.filter(x => x).length }} / {{ r.num_agents }}</b></div>
@@ -449,8 +512,24 @@ createApp({
             <div v-for="(e, i) in (r.comm_events || [])" :key="i">{{ eventText(e) }}</div>
           </div>
         </div>
+        <div class="card">
+          <h2>排行榜</h2>
+          <div class="board">
+            <div v-for="(e, i) in st.leaderboard" :key="i" :class="['brow', e.kind]">
+              <span class="rank">{{ e.rank ?? '·' }}</span>
+              <span class="bname">{{ e.name }}</span>
+              <span v-if="e.kind === 'group'" :class="['badge', e.status]">{{ STATUS_SHORT[e.status] }}</span>
+              <span v-else class="muted small">{{ e.status === 'computing' ? '计算中…' : e.status === 'failed' ? '没算出来' : '参照' }}</span>
+              <span class="bm">{{ e.metrics ? fmtMetric(e.metrics) : '' }}<i v-if="e.provisional && e.status !== 'lobby'">（暂定）</i></span>
+            </div>
+          </div>
+          <label class="small" style="display:block;margin-top:10px">
+            <input type="checkbox" :checked="st.screenLive" @change="setScreenLive($event.target.checked)">
+            比赛中投屏也显示各组全图（迷雾课不要开）</label>
+          <a class="small" href="/screen" target="_blank">打开投屏页 ↗</a>
+        </div>
         <div class="card" v-if="r.metrics">
-          <h2>本局结果</h2>
+          <h2>本局结果{{ multi ? ' · ' + r.group_name : '' }}</h2>
           <div class="stat"><span>全员到达 CSR</span><b>{{ r.metrics.CSR === 1 ? '是' : '否' }}</b></div>
           <div class="stat"><span>到达比例 ISR</span><b>{{ Math.round(r.metrics.ISR * 100) }}%</b></div>
           <div class="stat"><span>总步数 SoC</span><b>{{ r.metrics.SoC }}</b></div>

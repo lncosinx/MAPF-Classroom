@@ -18,6 +18,7 @@ createApp({
       progress: { submitted: 0, total: 0 }, countdownMs: null, countdownTotal: 20000, receivedAt: 0,
       now: performance.now(), reveal: null, metrics: null, atGoal: false, maxSteps: 128, toast: "",
       commTarget: null,   // 正在和谁通信（打开了操作卡）
+      groupName: null,    // 分组比拼时的组名
     });
     let toastTimer = null;
     const showToast = (m) => { st.toast = m; clearTimeout(toastTimer); toastTimer = setTimeout(() => (st.toast = ""), 2200); };
@@ -31,6 +32,7 @@ createApp({
         st.joined = true; st.player = m.player; tabStore.set("mapf.token", m.token);
       } else if (m.type === "state") {
         st.status = m.status; st.uiMode = m.ui_mode || st.uiMode;
+        if ("group_name" in m) st.groupName = m.group_name;
         st.seated = m.seated !== false;
         if (m.view) {
           if (!st.view || st.view.t !== m.view.t) { st.myChoice = null; st.commTarget = null; }
@@ -219,6 +221,7 @@ createApp({
     <div v-else-if="phase === 'play'">
       <div class="top">
         <div class="me"><span class="dot"></span>{{ st.player.nickname }}</div>
+        <span v-if="st.groupName" class="badge">{{ st.groupName }}</span>
         <span :class="['badge', st.status]">{{ st.status === 'paused' ? '暂停中' : '进行中' }}</span>
         <span v-if="st.uiMode === 'advanced'" class="muted">第 {{ st.view.t + 1 }} 步 / 最多 {{ st.maxSteps }} 步</span>
         <span v-if="st.view.at_goal" class="badge playing">🏁 你在终点上</span>

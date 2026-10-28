@@ -37,9 +37,19 @@ from .settings import RoundSettings
 from .views import ViewMemory, student_view, teacher_view
 
 _executor: Optional[ThreadPoolExecutor] = None
+_expert_executor: Optional[ThreadPoolExecutor] = None
 
 # 全员都由 AI 控制时，每步之间停一下，老师才看得清
 AUTO_STEP_DELAY = 0.4
+
+
+def get_expert_executor() -> ThreadPoolExecutor:
+    """专家（LaCAM）专用的单线程池。LaCAM 有全局锁、而且会用满时限，多组同时求解只能排队；
+    如果和模型前向共用线程池，排队的 LaCAM 会占住线程，把各组的模型前向也堵住（M4 压测前的隐患）。"""
+    global _expert_executor
+    if _expert_executor is None:
+        _expert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="expert")
+    return _expert_executor
 
 
 def get_executor() -> ThreadPoolExecutor:
@@ -48,6 +58,23 @@ def get_executor() -> ThreadPoolExecutor:
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2), thread_name_prefix="compute")
     return _executor
+
+
+def build_preset(settings: RoundSettings):
+    """按设置得到这一局的地图和起终点（各组、参照行都用它，保证是同一实例）。不合法抛 ValueError（中文）。"""
+    if settings.custom_map is not None:
+        preset = preset_from_spec(settings.custom_map)
+    else:
+        try:
+            preset = get_preset(settings.preset, num_agents=settings.num_agents, seed=settings.placement_seed)
+        except KeyError as e:
+            raise ValueError(str(e).strip("'\"")) from None
+    if len(preset.agents_xy) == 0:
+        raise ValueError("地图上还没有放起点和终点")
+    errs = validate_instance(preset.grid, preset.agents_xy, preset.targets_xy)
+    if errs:
+        raise ValueError("地图校验未通过：" + "；".join(errs))
+    return preset
 
 
 class Broadcaster(Protocol):
@@ -70,6 +97,7 @@ class GroupRound:
     def __init__(self, group_id: int, settings: RoundSettings, out: Broadcaster,
                  db: Optional[Database] = None, db_group_id: Optional[int] = None, clock=time.monotonic):
         self.group_id = group_id
+        self.group_name = f"第 {group_id + 1} 组"
         self.settings = settings
         self.out = out
         self.db = db
@@ -78,20 +106,9 @@ class GroupRound:
         self.status = "lobby"          # lobby / playing / paused / finished
         self.round_id: Optional[int] = None
 
-        if settings.custom_map is not None:
-            preset = preset_from_spec(settings.custom_map)
-        else:
-            try:
-                preset = get_preset(settings.preset, num_agents=settings.num_agents, seed=settings.placement_seed)
-            except KeyError as e:
-                raise ValueError(str(e).strip("'\"")) from None
-        errs = validate_instance(preset.grid, preset.agents_xy, preset.targets_xy)
-        if errs:
-            raise ValueError("地图校验未通过：" + "；".join(errs))
+        preset = build_preset(settings)
         self.preset = preset
         n = len(preset.agents_xy)
-        if n == 0:
-            raise ValueError("地图上还没有放起点和终点")
         # 小迷宫上 AI 表现差（M0 实测），开局前提示老师
         self.ai_hint = ai_hint(preset.grid, n)
         self.num_agents = n
@@ -176,7 +193,7 @@ class GroupRound:
         self.step_start = self.clock()
         self.deadline = self.step_start + self.settings.countdown_sec
         self.remaining = None
-        self._expert_fut = loop.run_in_executor(ex, self.game.compute_expert)
+        self._expert_fut = loop.run_in_executor(get_expert_executor(), self.game.compute_expert)
         await self.push_all()
         self._arm_timer()
 
@@ -415,7 +432,8 @@ class GroupRound:
         """发给学生的完整状态。view 只经由 views.student_view 生成。"""
         msg = {"type": "state", "status": self.status, "ui_mode": self.settings.ui_mode,
                "countdown_ms": self.countdown_ms(), "countdown_total_ms": int(self.settings.countdown_sec * 1000),
-               "progress": self.progress(), "max_steps": self.settings.max_steps}
+               "progress": self.progress(), "max_steps": self.settings.max_steps,
+               "group_name": self.group_name if self.settings.num_groups > 1 else None}
         if self.ctx is not None and self.status in ("playing", "paused"):
             # 通信会在一步之内改变载荷（共享视野、消息），所以每次推送都重新生成，并记下最后一版
             self.views[agent] = student_view(self.game, self.ctx, agent, self.settings, self.memory,
@@ -429,7 +447,7 @@ class GroupRound:
         return msg
 
     def teacher_state(self) -> dict:
-        return {"type": "teacher_state", "group": self.group_id, "status": self.status,
+        return {"type": "teacher_state", "group": self.group_id, "group_name": self.group_name, "status": self.status,
                 "settings": self.settings.model_dump(), "preset_title": self.preset.title, "ai_hint": self.ai_hint,
                 "num_agents": self.num_agents, "seats": {str(a): p for a, p in self.seats.items()},
                 "online": sorted(self.online), "countdown_ms": self.countdown_ms(),
@@ -439,7 +457,8 @@ class GroupRound:
 
     def spectator_state(self) -> dict:
         """在线但没坐下的同学（观战）：只知道这一局的状态，没有任何视野。"""
-        msg = {"type": "state", "status": self.status, "seated": False, "ui_mode": self.settings.ui_mode}
+        msg = {"type": "state", "status": self.status, "seated": False, "ui_mode": self.settings.ui_mode,
+               "group_name": self.group_name if self.settings.num_groups > 1 else None}
         if self.status == "finished":
             msg["metrics"] = self.metrics
         return msg

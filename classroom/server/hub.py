@@ -1,11 +1,11 @@
-"""连接管理：玩家 id -> 学生 WS，老师 WS 列表。实现 core.round.Broadcaster。
+"""连接管理：玩家 id -> 学生 WS，老师 WS 列表，投屏页 WS 列表。
+（智能体编号只在组内有意义，按组找学生由 core/session.py 的 GroupOut 负责。）
 
 发送失败（对方刚断线）只记日志不抛出：断线由各自 WS 处理协程的 finally 负责上报。
 """
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
 
 from fastapi import WebSocket
 
@@ -16,8 +16,7 @@ class Hub:
     def __init__(self):
         self.students: dict[int, WebSocket] = {}
         self.teachers: set[WebSocket] = set()
-        # agent -> player_id 的查询由 Classroom 注入（当前这一局的座位表）
-        self.player_of: Callable[[int], Optional[int]] = lambda agent: None
+        self.screens: set[WebSocket] = set()
 
     async def _send(self, ws: WebSocket, msg: dict):
         try:
@@ -40,11 +39,10 @@ class Hub:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def send_agent(self, agent: int, msg: dict):
-        pid = self.player_of(agent)
-        if pid is not None:
-            await self.send_player(pid, msg)
-
     async def send_teachers(self, msg: dict):
         for ws in list(self.teachers):
+            await self._send(ws, msg)
+
+    async def send_screens(self, msg: dict):
+        for ws in list(self.screens):
             await self._send(ws, msg)

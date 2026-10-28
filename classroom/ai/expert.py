@@ -107,7 +107,7 @@ def prioritized_plan(grid: np.ndarray, starts, goals, horizon: Optional[int] = N
 
 
 class ExpertPolicy:
-    def __init__(self, grid: np.ndarray, goals, time_limit: float = 0.2, use_lacam: bool = True):
+    def __init__(self, grid: np.ndarray, goals, time_limit: float = 0.03, use_lacam: bool = True):
         self.grid = np.asarray(grid, dtype=np.uint8)
         self.goals = np.asarray(goals, dtype=np.int32)
         self.time_limit = time_limit

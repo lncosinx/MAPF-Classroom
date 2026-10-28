@@ -32,11 +32,11 @@
   - 测试：`tests/test_{views_no_leak,round,server}.py`；冒烟脚本 `tools/play_bots.py`。
 - **M2 已完成**（见 `docs/M2_REPORT.md`）：`core/comm.py`（`CommState`，纯逻辑）、`views.py` 的 `shared` / `contacts` / `comm`、
   回合机的 `comm_*` 方法、`comm_event` 写库；学生页通信卡片，老师页通信规则、通信图、日志和地图缩放。
-- **M3 代码完成，待浏览器手测**：
-  - 后端：`maps/{mapio,ai_hint}.py`、`library.py` 的用户地图和模板、`presets/lessons.json`、`RoundSettings.custom_map`、`server/teacher_rpc.py`（老师 WS 的 `rpc` 消息）；
-  - 前端：`static/teacher/workshop.js`（地图工坊）、课例模板、拖拽分座位、AI 提示；
-  - 测试：`tests/test_{mapio,library,ai_hint}.py`，以及 `test_server.py` 里的工坊开局端到端测试。
-- 下一步：用户手测 M3 → 写 `docs/M3_REPORT.md` → M4（分组比拼、排行榜、投屏页）。
+- **M3 已完成**（见 `docs/M3_REPORT.md`，含 RPC 方法表）：`maps/{mapio,ai_hint}.py`、地图库和模板、`custom_map`、
+  `server/teacher_rpc.py`、`static/teacher/workshop.js`、课例模板、拖拽分座位、AI 提示。
+- **M4 代码完成，压测通过，待浏览器手测**：`core/{leaderboard,reference}.py`；`session.py` 重构为多组（每组一个 `GroupOut`，智能体编号只在组内有意义）；
+  `/screen` + `/ws/screen`；老师页组切换、排行榜、投屏开关；`tools/loadtest.py`（8 组 × 16 体、40 人：p95 66 ms）。
+- 下一步：用户手测 M4 → 写 `docs/M4_REPORT.md` → M5（复盘与导出）。
 - 开发机是 Linux 笔记本（Ryzen 7535H，12 核，无 AVX512），**最终部署在 Windows 老师机上**（见下文"跨平台约束"）。
 - 仓库目前挂载在 `/root/Chameleon/MAPF-Classroom`（Chameleon 仓库目录下），只是临时位置；代码里所有路径都相对仓库根，不依赖 Chameleon。
 
@@ -86,8 +86,9 @@ curl -L -o static/vendor/vue.global.prod.js https://cdn.jsdelivr.net/npm/vue@3.5
 #   用 `ps -eo pid,cmd | awk '$2 ~ /python/ && $0 ~ /-m classroom.server/'`，并检查启动日志里没有报错
 #   本机 shell 可能设了 http_proxy：用 curl 自检本地服务要加 `--noproxy '*'`，否则代理会回 503，看起来像服务挂了
 
-# M4 起（尚未实现）
-python tools/loadtest.py --students 40 --groups 8 --agents 16   # 压力测试，目标每轮 < 1 s
+# M4
+.venv/bin/python tools/loadtest.py --groups 8 --agents 16 --students 40   # 压测：自己在 8768 端口起临时服务，目标 p95 < 1 s
+#   投屏页 http://<本机局域网IP>:8000/screen（比赛中只显示进度，各组结束后显示全图）
 ```
 
 前端没有构建步骤，也就没有编译期检查。改了 `static/` 下的 JS 之后，可以用 VS Code server 自带的 node 做语法检查：
@@ -199,8 +200,8 @@ numpy 的 float32 `pow` 按指令集分派，足迹通道（ch3）有 27 个衰�
    - 地图和场景的格式见 `third_party/README.md`；
    - 返回的字符串里有 `ERROR` 就算失败，退回 prioritized 简易专家，并在 UI 上标明"简易专家"。
 4. 每步从当前状态重新求解，只取第一步。如果所有智能体都按上一次的计划走了一步，就**复用**那份计划，避免建议前后跳变。
-5. **LaCAM* 是 anytime 的，会把时限用满**（实测 ≥16 体时 `time_limit=1.0` 就真的耗 1 s）。加上全局锁，8 组串行就是 8 倍。
-   所以课堂默认 `expert_time_limit=0.2`，并且专家建议要在**推送新视野之后**异步算，不能挡在"全员提交 → 推送"的关键路径上（M1 落实）。
+5. **LaCAM* 是 anytime 的，会把时限用满**（实测 ≥16 体时 `time_limit=1.0` 就真的耗 1 s），加上全局锁，多组只能串行。
+   课堂默认 `expert_time_limit=0.03`（课堂规模上与 0.2 s 的解质量几乎相同），专家在推送新视野之后异步算，跑在**单独的单线程池** `get_expert_executor()` 上，不和模型前向抢线程。调大时限之前先跑 `tools/loadtest.py`。
 
 ## 跨平台约束（最终跑在 Windows 上）
 
@@ -241,6 +242,8 @@ numpy 的 float32 `pow` 按指令集分派，足迹通道（ch3）有 27 个衰�
 - [ ] 学生通信：共享视野只在本步有效、只含对方视野框？可联系列表里视野外的队友有没有带位置？
 - [ ] 推给老师的事件不要用 `{"type": ..., **event}` 展开：事件自己也有 `type` 字段，会把消息类型覆盖掉（M2 踩过）
 - [ ] 观战（在线没座位）的同学是不是也收到开始 / 暂停 / 结束？（`GroupRound.spectator_state`）
+- [ ] 多组时：发给学生的消息有没有走**本组**的 `GroupOut`？智能体编号只在组内有意义，别用全局表查人
+- [ ] 投屏载荷（`Classroom.screen_state`）在比赛中、没开"显示全图"时，是不是不含任何地图 / 位置 / 目标？
 - [ ] 多个组是不是共用了同一个 net 实例？
 - [ ] 每局开始有没有调用 `reset_comm_state()` 和 `builder.reset()`？
 - [ ] `prev_action` 用的是不是实际执行的动作？

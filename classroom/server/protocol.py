@@ -59,6 +59,7 @@ class Assign(BaseModel):
     type: Literal["assign"]
     player_id: int
     agent: Optional[int] = None
+    group: int = Field(default=0, ge=0, le=11)
 
 
 class Remove(BaseModel):
@@ -75,9 +76,16 @@ class Rpc(BaseModel):
     params: dict = Field(default_factory=dict)
 
 
+class Screen(BaseModel):
+    """投屏页开关：比赛中是否也显示各组全图。"""
+    type: Literal["screen"]
+    live_maps: bool
+
+
 class Command(BaseModel):
-    # step_now：立即结算本步（不等倒计时）
+    # step_now：立即结算本步（不等倒计时）；带 group 只结算那一组，不带则所有组
     type: Literal["start", "pause", "resume", "step_now", "end", "shuffle", "refresh"]
+    group: Optional[int] = Field(default=None, ge=0, le=11)
 
 
-TeacherMsg = TypeAdapter(Annotated[Union[Configure, Assign, Remove, Rpc, Command], Field(discriminator="type")])
+TeacherMsg = TypeAdapter(Annotated[Union[Configure, Assign, Remove, Rpc, Screen, Command], Field(discriminator="type")])

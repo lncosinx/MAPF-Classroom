@@ -43,7 +43,7 @@ class GroupGame:
                  seed: int = 0, max_steps: int = 128, map_name: Optional[str] = None,
                  controllers: Optional[Sequence[str]] = None, stop_on_success: bool = True,
                  model: Optional[ModelPolicy] = None, model_kwargs: Optional[dict] = None,
-                 need_expert: Optional[bool] = None, expert_time_limit: float = 0.2):
+                 need_expert: Optional[bool] = None, expert_time_limit: float = 0.03):
         """起终点二选一：给 num_agents（由 pogema 按 seed 随机放置），或给 unpadded 的 agents_xy/targets_xy。
         后者开局前必须先过 maps.validate（pogema 会把压墙的点悄悄挪走）。"""
         grid = parse_map(map_str)

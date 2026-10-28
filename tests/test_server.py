@@ -349,3 +349,64 @@ def test_no_bare_state_class_rules():
             continue
         bad = [m.group(0).strip() for m in pat.finditer(p.read_text(encoding="utf-8"))]
         assert not bad, f"{p.name}: {bad}"
+
+
+def test_two_groups_full_round_and_screen(client):
+    """M4：两组各 2 个学生打完；投屏页比赛中不含地图、结束后有；数据库按组分开。"""
+    assert client.get("/screen").status_code == 200
+    with client.websocket_connect(f"/ws/teacher?key={KEY}") as teacher, client.websocket_connect("/ws/screen") as screen:
+        recv_until(teacher, lambda m: m["type"] == "classroom")
+        first = screen.receive_json()
+        assert first["type"] == "screen" and "join_url" in first
+        teacher.send_json({"type": "configure", "settings": {
+            "preset": "doorway", "num_groups": 2, "countdown_sec": 60, "max_steps": 30, "view_radius": 2}})
+        snap = recv_until(teacher, lambda m: m["type"] == "classroom" and len(m["groups"]) == 2)
+        assert [g["group_name"] for g in snap["groups"]] == ["第 1 组", "第 2 组"]
+        ctxs, studs = [], []
+        for i in range(4):
+            cm = client.websocket_connect("/ws/student"); ws = cm.__enter__(); ctxs.append(cm)
+            ws.send_json({"type": "join", "nickname": f"生{i}", "seat": str(i)})
+            recv_until(ws, lambda m: m["type"] == "welcome")
+            studs.append(ws)
+        try:
+            teacher.send_json({"type": "start"})
+            snap = recv_until(teacher, lambda m: m["type"] == "classroom" and all(g["status"] == "playing" for g in m["groups"]))
+            sizes = sorted(sum(1 for p in snap["players"] if p["group"] == g) for g in (0, 1))
+            assert sizes == [2, 2]
+            # 比赛中投屏载荷不含地图
+            sc = screen.receive_json()
+            while sc["type"] != "screen" or sc["status"] != "playing":
+                sc = screen.receive_json()
+            assert all("map" not in g for g in sc["groups"])
+            done = [False] * 4
+            for _ in range(200):
+                if all(done):
+                    break
+                for i, ws in enumerate(studs):
+                    if done[i]:
+                        continue
+                    m = recv_until(ws, lambda m: m["type"] == "state" and (m["status"] == "finished" or "view" in m))
+                    if m["status"] == "finished":
+                        done[i] = True
+                        assert m["group_name"] in ("第 1 组", "第 2 组")
+                        continue
+                    ws.send_json({"type": "choose", "t": m["view"]["t"], "action": greedy(m["view"])})
+            assert all(done)
+        finally:
+            for cm in ctxs:
+                cm.__exit__(None, None, None)
+        # 结束后：排行榜两组都有名次，投屏页两组都有全图
+        # 比赛期间没读老师端的消息，队列里积压了很多，放宽上限
+        lb = recv_until(teacher, lambda m: m["type"] == "leaderboard" and
+                        sum(1 for r in m["rows"] if r["kind"] == "group" and r["status"] == "finished") == 2, limit=20000)
+        assert sorted(r["rank"] for r in lb["rows"] if r["kind"] == "group")[0] == 1
+        sc = screen.receive_json()
+        while not (sc["type"] == "screen" and all(g["status"] == "finished" for g in sc["groups"])):
+            sc = screen.receive_json()
+        assert all("map" in g for g in sc["groups"])
+    con = sqlite3.connect(next(Path(client.tmp_path, "sessions").glob("*.sqlite")))
+    groups = con.execute("SELECT id, name FROM grp ORDER BY id").fetchall()
+    per = dict(con.execute("SELECT group_id, count(DISTINCT round_id) FROM step_decision GROUP BY group_id").fetchall())
+    con.close()
+    assert [n for _, n in groups][:2] == ["第 1 组", "第 2 组"]
+    assert len(per) == 2 and all(v == 1 for v in per.values())
