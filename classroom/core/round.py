@@ -26,9 +26,11 @@ from typing import Optional, Protocol
 import numpy as np
 
 from ..ai.model_policy import ModelPolicy
-from ..maps.library import get_preset
+from ..maps.ai_hint import ai_hint
+from ..maps.library import get_preset, preset_from_spec
 from ..maps.validate import validate_instance
 from ..storage.db import Database
+from .comm import CommState
 from .coords import WAIT
 from .game import GroupGame, StepContext
 from .settings import RoundSettings
@@ -76,12 +78,22 @@ class GroupRound:
         self.status = "lobby"          # lobby / playing / paused / finished
         self.round_id: Optional[int] = None
 
-        preset = get_preset(settings.preset, num_agents=settings.num_agents, seed=settings.placement_seed)
+        if settings.custom_map is not None:
+            preset = preset_from_spec(settings.custom_map)
+        else:
+            try:
+                preset = get_preset(settings.preset, num_agents=settings.num_agents, seed=settings.placement_seed)
+            except KeyError as e:
+                raise ValueError(str(e).strip("'\"")) from None
         errs = validate_instance(preset.grid, preset.agents_xy, preset.targets_xy)
         if errs:
             raise ValueError("地图校验未通过：" + "；".join(errs))
         self.preset = preset
         n = len(preset.agents_xy)
+        if n == 0:
+            raise ValueError("地图上还没有放起点和终点")
+        # 小迷宫上 AI 表现差（M0 实测），开局前提示老师
+        self.ai_hint = ai_hint(preset.grid, n)
         self.num_agents = n
         # 模型补位和"模型此刻会怎么选"都来自同一次整组前向；专家总是算，用于记录和揭晓
         policy = ModelPolicy(n, variant=settings.model_variant, seed=settings.placement_seed, tta=settings.tta)
@@ -94,7 +106,8 @@ class GroupRound:
         self.seats: dict[int, int] = {}        # agent -> player_id
         self.online: set[int] = set()          # 在线的 player_id
         self.ctx: Optional[StepContext] = None
-        self.views: dict[int, dict] = {}       # 本步发给各学生的载荷（写库用：学生当时实际看到的）
+        self.views: dict[int, dict] = {}       # 本步最后一次发给各学生的载荷（写库用：学生当时实际看到的）
+        self.comm: Optional[CommState] = None  # 本步的学生通信状态（core/comm.py）
         self.choices: dict[int, Choice] = {}   # agent -> 本步的选择
         self.step_start = 0.0
         self.deadline: Optional[float] = None
@@ -115,6 +128,11 @@ class GroupRound:
     def student_agents(self) -> list[int]:
         """本步由在线学生控制的智能体。"""
         return sorted(a for a, p in self.seats.items() if p in self.online)
+
+    def ai_agents(self) -> list[int]:
+        """本步由 AI / 补位方控制的智能体（没人坐或学生断线）。"""
+        students = set(self.student_agents())
+        return [a for a in range(self.num_agents) if a not in students]
 
     def free_agents(self) -> list[int]:
         return [a for a in range(self.num_agents) if a not in self.seats]
@@ -151,6 +169,10 @@ class GroupRound:
         self.ctx = await loop.run_in_executor(ex, lambda: self.game.begin_step(with_expert=False))
         self.choices = {}
         self.views = {}
+        # 学生通信每步重来；上一步"下一步送达"的消息带过来
+        carry = self.comm.next_queue if self.comm is not None else None
+        self.comm = CommState(int(self.ctx.t), self.ctx.positions, self.settings,
+                              is_ai=lambda a: a not in self.student_agents(), carry=carry)
         self.step_start = self.clock()
         self.deadline = self.step_start + self.settings.countdown_sec
         self.remaining = None
@@ -200,6 +222,60 @@ class GroupRound:
         if self.status == "playing" and all(a in self.choices for a in self.student_agents()):
             await self.resolve(timed_out=False)
         return None
+
+    # ------------------------------------------------------------------ 学生通信
+    def _comm_ready(self, player_id: int, t: int) -> tuple[Optional[int], Optional[str]]:
+        if self.status != "playing" or self.comm is None or self._resolving:
+            return None, "现在不能通信" if self.status != "paused" else "暂停中不能通信"
+        if t != self.game.t:
+            return None, "这一步已经结束了"
+        agent = self.agent_of(player_id)
+        if agent is None:
+            return None, "你还没有分配到智能体"
+        return agent, None
+
+    async def comm_view_request(self, player_id: int, t: int, to: int) -> Optional[str]:
+        a, err = self._comm_ready(player_id, t)
+        if err:
+            return err
+        _, err = self.comm.request_view(a, to)
+        if err:
+            return err
+        await self._after_comm({a, to})
+        return None
+
+    async def comm_view_answer(self, player_id: int, t: int, frm: int, accept: bool) -> Optional[str]:
+        b, err = self._comm_ready(player_id, t)
+        if err:
+            return err
+        err = self.comm.answer(b, frm, accept)
+        if err:
+            return err
+        await self._after_comm({b, frm})
+        return None
+
+    async def comm_message(self, player_id: int, t: int, to: int, kind: str) -> Optional[str]:
+        a, err = self._comm_ready(player_id, t)
+        if err:
+            return err
+        err = self.comm.send_message(a, to, kind)
+        if err:
+            return err
+        # 下一步才送达时，接收方本步不用刷新
+        await self._after_comm({a, to} if self.settings.comm_delivery == "now" else {a})
+        return None
+
+    async def _after_comm(self, agents: set[int]):
+        """通信状态变了：写库、刷新相关学生的载荷、通知老师。"""
+        events = self.comm.drain()
+        if self.db is not None and self.round_id is not None and events:
+            await self.db.write_comm(self.round_id, self.db_group_id, [e.public() for e in events])
+        students = set(self.student_agents())
+        for a in sorted(agents & students):
+            await self.out.send_agent(a, self.student_state(a))
+        for e in events:
+            # 事件自己也有 type 字段，包一层，别把消息类型覆盖掉
+            await self.out.send_teachers({"type": "comm_event", "event": e.public()})
 
     async def resolve(self, timed_out: bool):
         """结算本步。timed_out=True 表示倒计时到点或老师强制结算。"""
@@ -254,7 +330,8 @@ class GroupRound:
                 rows.append(dict(
                     round_id=self.round_id, group_id=self.db_group_id, t=int(ctx.t), agent=i,
                     controller=controllers[i], player_id=self.seats.get(i) if i in students else None,
-                    view_json=_json(self.views.get(i)) if i in students else None, shared_view_json=None,
+                    view_json=_json(self.views.get(i)) if i in students else None,
+                    shared_view_json=_json((self.views.get(i) or {}).get("shared")) if i in students else None,
                     action=int(acts[i]),
                     submit_ts=ch.wall_ts if ch else None,
                     think_ms=round((ch.last_ts - self.step_start) * 1000.0, 1) if ch else None,
@@ -340,8 +417,9 @@ class GroupRound:
                "countdown_ms": self.countdown_ms(), "countdown_total_ms": int(self.settings.countdown_sec * 1000),
                "progress": self.progress(), "max_steps": self.settings.max_steps}
         if self.ctx is not None and self.status in ("playing", "paused"):
-            if agent not in self.views:
-                self.views[agent] = student_view(self.game, self.ctx, agent, self.settings, self.memory)
+            # 通信会在一步之内改变载荷（共享视野、消息），所以每次推送都重新生成，并记下最后一版
+            self.views[agent] = student_view(self.game, self.ctx, agent, self.settings, self.memory,
+                                             comm=self.comm, ai_agents=frozenset(self.ai_agents()))
             msg["view"] = self.views[agent]
             ch = self.choices.get(agent)
             msg["my_choice"] = ch.action if ch else None
@@ -352,15 +430,27 @@ class GroupRound:
 
     def teacher_state(self) -> dict:
         return {"type": "teacher_state", "group": self.group_id, "status": self.status,
-                "settings": self.settings.model_dump(), "preset_title": self.preset.title,
+                "settings": self.settings.model_dump(), "preset_title": self.preset.title, "ai_hint": self.ai_hint,
                 "num_agents": self.num_agents, "seats": {str(a): p for a, p in self.seats.items()},
                 "online": sorted(self.online), "countdown_ms": self.countdown_ms(),
                 "progress": self.progress(), "choices": {str(a): c.action for a, c in self.choices.items()},
-                "view": teacher_view(self.game, self.ctx), "metrics": self.metrics}
+                "view": teacher_view(self.game, self.ctx), "metrics": self.metrics,
+                "comm_events": [e.public() for e in self.comm.events] if self.comm is not None and self.ctx else []}
+
+    def spectator_state(self) -> dict:
+        """在线但没坐下的同学（观战）：只知道这一局的状态，没有任何视野。"""
+        msg = {"type": "state", "status": self.status, "seated": False, "ui_mode": self.settings.ui_mode}
+        if self.status == "finished":
+            msg["metrics"] = self.metrics
+        return msg
 
     async def push_all(self):
         for a in self.student_agents():
             await self.out.send_agent(a, self.student_state(a))
+        # 观战的同学也要知道开始 / 暂停 / 结束
+        seated = set(self.seats.values())
+        for pid in sorted(self.online - seated):
+            await self.out.send_player(pid, self.spectator_state())
         await self.out.send_teachers(self.teacher_state())
 
     async def push_progress(self):

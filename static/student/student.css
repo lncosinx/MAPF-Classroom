@@ -36,3 +36,31 @@
 .paused-banner { background: #fdf0d5; color: #a56d00; border-radius: 10px; padding: 8px 12px; text-align: center; font-weight: 600; }
 .simple .pad { grid-template-columns: repeat(3, 88px); grid-template-rows: repeat(3, 88px); }
 .simple .pad button { font-size: 38px; }
+
+/* 学生通信 */
+.request { border: 2px solid var(--contact); }
+.request .row { display: flex; gap: 8px; margin-top: 8px; }
+.request .btn { flex: 1; }
+.comm-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.dots { display: inline-flex; gap: 4px; align-items: center; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--contact); display: inline-block; }
+.small { font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.chip { border: 1.5px solid var(--contact); background: #fff; color: var(--text); border-radius: 999px; padding: 6px 12px;
+  font-weight: 600; min-height: 40px; }
+.chip.on { background: var(--contact); color: #fff; }
+.chip .tag { font-size: 11px; font-weight: 400; background: #eef2f4; color: var(--muted); border-radius: 6px; padding: 1px 5px; margin-left: 3px; }
+.chip .tag.ok { background: #d7f2ec; color: #0b7a6a; }
+.chip .tag.no { background: #fde8e6; color: var(--danger); }
+.chip:disabled { opacity: .5; }
+.panel { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 8px; }
+.btn.full { width: 100%; }
+.msgs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.msg { border: 0; background: #e8eef2; border-radius: 10px; padding: 8px; min-height: 44px; display: flex; align-items: center;
+  gap: 6px; font-size: 14px; }
+.msg .ic { font-size: 20px; }
+.msg:disabled { opacity: .4; }
+.simple .msgs { grid-template-columns: repeat(4, 1fr); }
+.simple .msg { justify-content: center; min-height: 56px; }
+.simple .msg .ic { font-size: 28px; }
+.log { margin-top: 10px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }

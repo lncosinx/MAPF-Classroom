@@ -9,12 +9,20 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..maps.mapio import MapSpec
+
+# 预设消息：我要往 ↑↓←→ 走 / ✋ 请让一下 / ✅ 你先走 / 🏁 我到了
+MESSAGE_KINDS = ("move_up", "move_down", "move_left", "move_right", "yield", "go_first", "arrived")
+MessageKind = Literal["move_up", "move_down", "move_left", "move_right", "yield", "go_first", "arrived"]
+
 
 class RoundSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # 地图：预设名 + 人数 + 放置种子（教学图自带起终点，此时 num_agents 忽略）
+    # 地图：预设名 + 人数 + 放置种子（教学图和老师保存的图自带起终点，此时 num_agents 忽略）
     preset: str = "four-rooms"
+    # 地图工坊里画好但没保存的图：有值时优先于 preset，并随 settings_json 一起写进库里，便于复现
+    custom_map: Optional[MapSpec] = None
     num_agents: Optional[int] = Field(default=None, ge=1, le=64)
     placement_seed: int = 0
 
@@ -35,6 +43,19 @@ class RoundSettings(BaseModel):
     fill_policy: Literal["model", "expert", "idle"] = "model"
     # 学生超时没提交：wait = 原地不动；ai = 按 fill_policy 代选
     timeout_policy: Literal["wait", "ai"] = "wait"
+
+    # 学生通信（与模型内部学到的通信互相独立，PLAN.md §6.3）
+    comm_enabled: bool = True
+    # L2 半径，默认与模型的 comm_radius 一致
+    comm_radius: float = Field(default=4.0, ge=1.0, le=12.0)
+    comm_view_exchange: bool = True
+    # 交换视野是否不用对方确认（对方由 AI 控制时总是自动同意）
+    comm_auto_accept: bool = False
+    comm_messages: list[MessageKind] = Field(default_factory=lambda: list(MESSAGE_KINDS))
+    # 每体每步的通信次数（交换视野请求和发消息各算一次），None = 不限
+    comm_budget: Optional[int] = Field(default=None, ge=0, le=10)
+    # 消息送达时机：now = 立即；next = 下一步开始时
+    comm_delivery: Literal["now", "next"] = "now"
 
     ui_mode: Literal["simple", "advanced"] = "advanced"
     model_variant: Literal["big", "small"] = "big"

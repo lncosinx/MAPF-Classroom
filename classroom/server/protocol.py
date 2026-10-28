@@ -8,7 +8,7 @@ from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from ..core.settings import RoundSettings
+from ..core.settings import MessageKind, RoundSettings
 
 
 class Join(BaseModel):
@@ -24,7 +24,30 @@ class Choose(BaseModel):
     action: int = Field(ge=0, le=4)
 
 
-StudentMsg = TypeAdapter(Annotated[Union[Join, Choose], Field(discriminator="type")])
+class ViewRequest(BaseModel):
+    """请求和 to 号队友交换视野（本步有效）。"""
+    type: Literal["view_request"]
+    t: int
+    to: int
+
+
+class ViewAnswer(BaseModel):
+    """回应 frm 号队友的交换视野请求。"""
+    type: Literal["view_answer"]
+    t: int
+    frm: int = Field(alias="from")
+    accept: bool
+
+
+class SendMessage(BaseModel):
+    type: Literal["message"]
+    t: int
+    to: int
+    kind: MessageKind
+
+
+StudentMsg = TypeAdapter(Annotated[Union[Join, Choose, ViewRequest, ViewAnswer, SendMessage],
+                                   Field(discriminator="type")])
 
 
 class Configure(BaseModel):
@@ -44,9 +67,17 @@ class Remove(BaseModel):
     player_id: Optional[int] = None
 
 
+class Rpc(BaseModel):
+    """地图工坊、地图库、模板的请求-应答（见 server/teacher_rpc.py）。"""
+    type: Literal["rpc"]
+    id: int
+    method: str = Field(max_length=40)
+    params: dict = Field(default_factory=dict)
+
+
 class Command(BaseModel):
     # step_now：立即结算本步（不等倒计时）
     type: Literal["start", "pause", "resume", "step_now", "end", "shuffle", "refresh"]
 
 
-TeacherMsg = TypeAdapter(Annotated[Union[Configure, Assign, Remove, Command], Field(discriminator="type")])
+TeacherMsg = TypeAdapter(Annotated[Union[Configure, Assign, Remove, Rpc, Command], Field(discriminator="type")])

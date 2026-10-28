@@ -43,16 +43,35 @@ async def bot(url, i, rng, done: asyncio.Event, log):
     async with websockets.connect(url + "/ws/student") as ws:
         await ws.send(json.dumps({"type": "join", "nickname": f"机器人{i + 1}", "seat": f"R{i + 1}"}))
         last_t = -1
+        answered = set()
         async for raw in ws:
             m = json.loads(raw)
             if m["type"] == "state" and m.get("status") == "finished":
+                if m.get("seated") is False:
+                    print(f"  机器人{i + 1} 没有座位，观战到结束")
                 log.append((i, m.get("metrics")))
                 done.set()
                 return
-            if m["type"] == "state" and m.get("status") == "playing" and "view" in m and m["view"]["t"] != last_t:
-                last_t = m["view"]["t"]
+            if m["type"] != "state" or m.get("status") != "playing" or "view" not in m:
+                continue
+            v = m["view"]
+            # 收到交换视野请求：随机同意 / 拒绝（每个请求只回一次）
+            for frm in (v.get("comm") or {}).get("requests_in", []):
+                if (v["t"], frm) not in answered:
+                    answered.add((v["t"], frm))
+                    await ws.send(json.dumps({"type": "view_answer", "t": v["t"], "from": frm, "accept": rng.random() < 0.7}))
+            if v["t"] != last_t:
+                last_t = v["t"]
+                # 新的一步：有队友在范围内时，随机通信一次
+                if v.get("contacts") and rng.random() < 0.4:
+                    to = rng.choice(v["contacts"])["agent"]
+                    if rng.random() < 0.5 and v["comm"]["view_exchange"]:
+                        await ws.send(json.dumps({"type": "view_request", "t": last_t, "to": to}))
+                    else:
+                        await ws.send(json.dumps({"type": "message", "t": last_t, "to": to,
+                                                  "kind": rng.choice(v["comm"]["kinds"])}))
                 await asyncio.sleep(rng.uniform(0.2, 1.5))
-                await ws.send(json.dumps({"type": "choose", "t": last_t, "action": pick(m["view"], rng)}))
+                await ws.send(json.dumps({"type": "choose", "t": last_t, "action": pick(v, rng)}))
 
 
 async def main_async(args):
@@ -97,9 +116,13 @@ def check_db(data_dir: Path):
     con.close()
     ci = STEP_DECISION_COLS.index("controller")
     stu = [dict(zip(STEP_DECISION_COLS, r)) for r in rows if r[ci] == "student"]
-    missing = {k for d in stu for k in STEP_DECISION_COLS if k != "shared_view_json" and d[k] is None}
+    missing = {k for d in stu for k in STEP_DECISION_COLS if d[k] is None}
+    con = sqlite3.connect(dbs[-1])
+    comm = con.execute("SELECT type, count(*) FROM comm_event WHERE round_id=? GROUP BY type", (rid,)).fetchall()
+    con.close()
     print(f"数据库 {dbs[-1].name}：round {rid}，step_decision {len(rows)} 行，其中学生 {len(stu)} 行；"
           f"{'学生行字段齐全' if not missing else '缺字段：' + ','.join(sorted(missing))}")
+    print(f"通信事件：{dict(comm) or '无'}")
     return 0 if stu and not missing else 1
 
 

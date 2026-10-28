@@ -14,7 +14,7 @@ from classroom.core.views import ViewMemory, in_box, student_view, view_box
 from classroom.maps.generate import generate, random_pairs
 from classroom.core.coords import parse_map
 
-FORBIDDEN_KEYS = {"expert", "expert_actions", "expert_source", "ai", "model", "model_actions", "model_probs",
+FORBIDDEN_KEYS = {"expert", "expert_actions", "expert_source", "ai", "model", "model_actions", "model_probs", "custom_map",
                   "probs", "logits", "attn", "ai_edges", "targets", "positions"}
 
 
@@ -156,3 +156,74 @@ def test_projection_matches_pogema_ch2():
                 assert [int(pos[0] + rr - 5), int(pos[1] + cc - 5)] == cell
             game.apply(rng.integers(0, 5, size=10))
     assert checked_proj > 0, "没覆盖到目标在视野外的情形"
+
+
+SHARED_KEYS = {"agent", "box", "rows", "agents"}
+CONTACT_KEYS = {"agent", "visible", "ai_controlled"}
+
+
+@pytest.mark.parametrize("radius,auto", [(1, False), (2, True), (3, False)])
+def test_shared_view_and_contacts_no_leak(radius, auto):
+    """共享视野只在交换成立的那一步出现，内容严格是对方的视野框；可联系列表里视野外的队友不带位置。"""
+    from classroom.core.comm import CommState
+    rng = np.random.default_rng(radius * 10 + auto)
+    settings = RoundSettings(view_radius=radius, comm_radius=4.0, comm_auto_accept=auto)
+    ms = generate("random", 12, 12, 0.15, seed=radius)
+    grid = parse_map(ms)
+    n = 10
+    s, g = random_pairs(grid, n, seed=radius)
+    game = GroupGame(ms, agents_xy=s, targets_xy=g, max_steps=20, need_expert=False, stop_on_success=False)
+    memory = ViewMemory(n, grid.shape)
+    ai = {7, 8, 9}
+    saw_shared = saw_hidden_contact = False
+    for t in range(10):
+        ctx = game.begin_step(with_expert=False)
+        comm = CommState(t, ctx.positions, settings, is_ai=lambda a: a in ai)
+        # 随机发请求、随机回应、随机发消息
+        for _ in range(12):
+            a = int(rng.integers(0, 7))
+            cs = comm.contacts(a)
+            if not cs:
+                continue
+            b = int(rng.choice(cs))
+            op = rng.integers(0, 3)
+            if op == 0:
+                comm.request_view(a, b)
+            elif op == 1 and comm.pending:
+                (x, y) = sorted(comm.pending)[0]
+                comm.answer(y, x, bool(rng.integers(0, 2)))
+            else:
+                comm.send_message(a, b, "yield")
+        for agent in range(n):
+            seen_before = memory.seen[agent].copy()
+            p = student_view(game, ctx, agent, settings, memory, comm=comm, ai_agents=frozenset(ai))
+            json.dumps(p)
+            # 自己那部分照旧不泄露
+            check_payload(game, ctx, agent, settings, seen_before, {**p, "shared": [], "contacts": [], "comm": None})
+            # 共享视野：伙伴集合 = 交换成立的；内容 = 对方视野框；不含目标和记忆
+            assert {sh["agent"] for sh in p["shared"]} == comm.shared.get(agent, set())
+            for sh in p["shared"]:
+                saw_shared = True
+                assert set(sh) == SHARED_KEYS
+                j = sh["agent"]
+                box = view_box(ctx.positions[j], radius, grid.shape)
+                assert sh["box"] == list(box)
+                for i, row in enumerate(sh["rows"]):
+                    for k, ch in enumerate(row):
+                        assert (ch == "#") == bool(game.grid[box[0] + i, box[1] + k])
+                for a in sh["agents"]:
+                    assert a["agent"] != agent and in_box(a["pos"], box)
+                    assert a["pos"] == ctx.positions[a["agent"]].tolist()
+            # 可联系列表：只有编号和两个布尔量，没有位置
+            assert {c["agent"] for c in p["contacts"]} == set(comm.contacts(agent))
+            for c in p["contacts"]:
+                assert set(c) == CONTACT_KEYS
+                assert c["visible"] == in_box(ctx.positions[c["agent"]], p["box"])
+                assert c["ai_controlled"] == (c["agent"] in ai)
+                saw_hidden_contact |= not c["visible"]
+            # 通信状态里没有任何坐标或建议
+            assert not set(all_keys(p["comm"])) & (FORBIDDEN_KEYS | {"pos", "box", "rows"})
+        game.apply(rng.integers(0, 5, size=n))
+    assert saw_shared, "没覆盖到交换成功的情形"
+    if radius < 4:
+        assert saw_hidden_contact, "没覆盖到视野外可联系的情形"

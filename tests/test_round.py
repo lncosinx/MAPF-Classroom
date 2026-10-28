@@ -205,3 +205,27 @@ def test_step_decision_rows_complete(tmp_path):
             assert view["t"] == d["t"] and view["agent"] == d["agent"]
         assert len(d["legal_mask"]) == 5 and len(json.loads(d["model_probs_json"])) == 5
         assert d["expert_source"] in ("lacam", "simple")
+
+
+def test_spectators_get_status_updates():
+    """在线但没坐下的同学也要收到开始 / 结束（之前收不到，观战者会一直停在等待页）。"""
+    async def go():
+        got = []
+
+        class Out(Sink):
+            async def send_player(self, pid, msg):
+                got.append((pid, msg))
+
+            async def kick(self, pid):
+                pass
+
+        sink = Out(); r = make_round(sink)
+        r.online.add(99)            # 99 号在线但没座位
+        await r.start()
+        await r.end()
+        return got
+    got = asyncio.run(go())
+    statuses = [m["status"] for pid, m in got if pid == 99]
+    assert statuses[0] == "playing" and statuses[-1] == "finished"
+    assert all(m["seated"] is False and "view" not in m for _, m in got)
+    assert "metrics" in got[-1][1]

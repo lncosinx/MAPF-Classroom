@@ -2,19 +2,25 @@
 //
 // scene 结构（各页面自己从服务端消息拼出来）：
 //   H, W                 地图尺寸
-//   cells[r]             每行一个字符串：'.' 可见空地  '#' 可见障碍  'm' 记忆中的空地  'M' 记忆中的障碍  '?' 未知（迷雾）
-//   agents[]             {id, r, c, color, label, self}
+//   cells[r]             每行一个字符串：'.' 可见空地  '#' 可见障碍  'm' 记忆中的空地  'M' 记忆中的障碍
+//                        's' 队友共享来的空地  'S' 共享来的障碍  '?' 未知（迷雾）
+//   agents[]             {id, r, c, color, label, self, contact}   contact=true：在通信范围内，画高亮光圈、可点击
 //   goals[]              {id, r, c, color, self, proj, label}       proj=true：目标在视野外，这是它在视野框边上的投影（同 pogema ch2，可能落在墙上或别人身上）
 //   arrows[]             {r, c, action, color, dashed}     动作箭头（专家 / AI / 幽灵预览）
 //   box                  [r0, c0, r1, c1] | null            自己的视野框（虚线）
 //   boxes[]              {box, color}                       老师端：各学生的视野框
 //   edges[]              {a: [r, c], b: [r, c]}            AI 通信边
-//   clickable            点击格子时发出 cell 事件
+//   links[]              {a: [r, c], b: [r, c], color, dashed}   学生通信连线（老师端）
+//   circles[]            {r, c, radius, color}             通信范围圆（L2 半径，单位：格）
+//   sharedBoxes[]        {box, color}                      队友共享来的视野框（细实线）
+//   bubbles[]            {r, c, text}                      消息气泡（显示在发送者头上）
+//   clickable            点击格子时发出 cell 事件；点击带 contact 的智能体发出 agent 事件
 const { computed } = Vue;
 
 const S = 40; // 每格的用户坐标单位
 
-const FILL = { ".": "var(--free)", "#": "var(--obstacle)", "m": "var(--memory)", "M": "var(--memory-wall)", "?": "var(--fog)" };
+const FILL = { ".": "var(--free)", "#": "var(--obstacle)", "m": "var(--memory)", "M": "var(--memory-wall)",
+               "s": "var(--shared)", "S": "var(--shared-wall)", "?": "var(--fog)" };
 
 function arrowPath(r, c, action, len = 0.42) {
   const d = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]][action] || [0, 0];
@@ -32,7 +38,7 @@ function arrowPath(r, c, action, len = 0.42) {
 export const GridView = {
   name: "GridView",
   props: { scene: { type: Object, required: true } },
-  emits: ["cell"],
+  emits: ["cell", "agent"],
   setup(props) {
     const S_ = S;
     const cellList = computed(() => {
@@ -77,6 +83,17 @@ export const GridView = {
     <!-- 目标底色（在智能体下层） -->
     <rect v-for="g in goalMarks" :key="'gb' + g.id" v-show="!g.proj" :x="g.c * S + 4" :y="g.r * S + 4"
           :width="S - 8" :height="S - 8" rx="6" :fill="g.color" opacity="0.14"/>
+    <!-- 队友共享来的视野框 -->
+    <rect v-for="(b, i) in (scene.sharedBoxes || [])" :key="'sb' + i" :x="rectOf(b.box).x" :y="rectOf(b.box).y"
+          :width="rectOf(b.box).w" :height="rectOf(b.box).h" fill="none" :stroke="b.color" stroke-width="2" opacity="0.8"/>
+    <!-- 通信范围圆 -->
+    <circle v-for="(c, i) in (scene.circles || [])" :key="'ci' + i" :cx="(c.c + 0.5) * S" :cy="(c.r + 0.5) * S"
+            :r="c.radius * S" :fill="c.color" fill-opacity="0.05" :stroke="c.color" stroke-width="1.5"
+            stroke-dasharray="3 5" opacity="0.7"/>
+    <!-- 学生通信连线 -->
+    <line v-for="(e, i) in (scene.links || [])" :key="'l' + i" :x1="(e.a[1] + 0.5) * S" :y1="(e.a[0] + 0.5) * S"
+          :x2="(e.b[1] + 0.5) * S" :y2="(e.b[0] + 0.5) * S" :stroke="e.color" stroke-width="3" opacity="0.75"
+          stroke-linecap="round" :stroke-dasharray="e.dashed ? '6 5' : null"/>
     <!-- AI 通信边 -->
     <line v-for="(e, i) in (scene.edges || [])" :key="'e' + i" :x1="(e.a[1] + 0.5) * S" :y1="(e.a[0] + 0.5) * S"
           :x2="(e.b[1] + 0.5) * S" :y2="(e.b[0] + 0.5) * S" stroke="var(--c3)" stroke-width="2" opacity="0.55"/>
@@ -84,8 +101,12 @@ export const GridView = {
     <g v-for="a in (scene.agents || [])" :key="'a' + a.id" class="agent"
        :style="{ transform: 'translate(' + (a.c * S) + 'px,' + (a.r * S) + 'px)' }">
       <circle v-if="a.self" class="pulse" :cx="S / 2" :cy="S / 2" :r="S * 0.42" fill="none" :stroke="a.color" stroke-width="3"/>
+      <circle v-if="a.contact" :cx="S / 2" :cy="S / 2" :r="S * 0.46" fill="none" stroke="var(--contact)"
+              stroke-width="3" stroke-dasharray="5 3"/>
       <circle :cx="S / 2" :cy="S / 2" :r="S * 0.34" :fill="a.color" stroke="#fff" stroke-width="2.5"/>
       <text v-if="a.label" :x="S / 2" :y="S / 2 + 5" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">{{ a.label }}</text>
+      <rect v-if="a.contact && scene.clickable" :width="S" :height="S" fill="transparent" class="cell-click"
+            @click.stop="$emit('agent', a.id)"/>
     </g>
     <!-- 目标旗帜：画在智能体**上层**，否则投影 / 目标格上站着人时会被圆点盖住。
          投影（目标在视野外，pogema ch2 语义，可能落在墙上或别人身上）：灰色空心旗 + 虚线框，不抢眼但墙上也看得清。
@@ -118,6 +139,13 @@ export const GridView = {
         <polygon :points="a.p.head" :fill="a.color"/>
       </template>
       <rect v-else :x="(a.c + 0.5) * S - 6" :y="(a.r + 0.5) * S - 6" width="12" height="12" rx="2" :fill="a.color"/>
+    </g>
+    <!-- 消息气泡 -->
+    <g v-for="(b, i) in (scene.bubbles || [])" :key="'bu' + i"
+       :transform="'translate(' + ((b.c + 0.5) * S) + ',' + (b.r * S - 4) + ')'">
+      <rect :x="-S * 0.5" :y="-S * 0.62" :width="S" :height="S * 0.58" rx="9" fill="#fff" stroke="var(--contact)" stroke-width="1.5"/>
+      <path :d="'M-5,' + (-S * 0.05) + ' L0,4 L5,' + (-S * 0.05) + ' z'" fill="#fff" stroke="var(--contact)" stroke-width="1.5"/>
+      <text x="0" :y="-S * 0.22" text-anchor="middle" font-size="18">{{ b.text }}</text>
     </g>
     <!-- 点击层 -->
     <template v-if="scene.clickable">

@@ -3,7 +3,8 @@
 学生载荷只能包含：
   - 自己视野内的格子和智能体（视野 = Chebyshev 距离 ≤ r 的方框，与 pogema 一致）；
   - memory 模式下自己走过时见过的格子（只有障碍 / 空地，不含其他智能体）；
-  - 别人共享过来的视野（M2）；
+  - 本步和自己交换视野成功的队友的视野框（只含格子和其中的智能体，不含对方的目标和记忆）；
+  - 本步可联系的队友编号（视野外的只给编号、不给位置）和自己的通信状态（core/comm.py）；
   - 自己的目标：在视野内（或老师设成"始终可见"）时给坐标；否则只给它在视野框边上的投影，
     算法与 pogema Grid.get_square_target 相同（行、列偏移各自截断到 [-r, r]），即模型看到的 ch2。
 地图尺寸 H×W 也会下发：前端要用它画画布，它不暴露任何格子的内容。
@@ -15,6 +16,7 @@ from typing import Optional
 
 import numpy as np
 
+from .comm import CommState
 from .game import GroupGame, StepContext
 from .settings import RoundSettings
 
@@ -43,15 +45,24 @@ def in_box(rc, box) -> bool:
     return box[0] <= rc[0] <= box[2] and box[1] <= rc[1] <= box[3]
 
 
+def _box_content(game: GroupGame, ctx: StepContext, owner: int, settings: RoundSettings, viewer: int):
+    """owner 本步视野框里的格子（按行 '.' / '#'）和智能体（不含 viewer 自己）。"""
+    box = view_box(ctx.positions[owner], settings.view_radius, game.grid.shape)
+    r0, c0, r1, c1 = box
+    rows = ["".join("#" if v else "." for v in game.grid[r, c0:c1 + 1]) for r in range(r0, r1 + 1)]
+    agents = [{"agent": int(j), "pos": [int(p[0]), int(p[1])]}
+              for j, p in enumerate(ctx.positions) if j != viewer and in_box(p, box)]
+    return box, rows, agents
+
+
 def student_view(game: GroupGame, ctx: StepContext, agent: int, settings: RoundSettings,
-                 memory: Optional[ViewMemory] = None) -> dict:
-    """第 agent 号智能体在本步应当看到的全部内容。会顺带更新 memory。"""
+                 memory: Optional[ViewMemory] = None, comm: Optional[CommState] = None,
+                 ai_agents: frozenset = frozenset()) -> dict:
+    """第 agent 号智能体在本步应当看到的全部内容。会顺带更新 memory（共享来的视野不进记忆）。"""
     H, W = game.grid.shape
     pos = ctx.positions[agent]
-    box = view_box(pos, settings.view_radius, (H, W))
+    box, rows, agents = _box_content(game, ctx, agent, settings, viewer=agent)
     r0, c0, r1, c1 = box
-    # 视野内的格子：按行给出 '.' / '#'
-    rows = ["".join("#" if v else "." for v in game.grid[r, c0:c1 + 1]) for r in range(r0, r1 + 1)]
 
     mem_cells = []
     if memory is not None:
@@ -61,9 +72,6 @@ def student_view(game: GroupGame, ctx: StepContext, agent: int, settings: RoundS
             mem_cells = [[int(r), int(c), int(game.grid[r, c])] for r, c in np.argwhere(seen)]
         memory.update(agent, box)
 
-    agents = [{"agent": int(j), "pos": [int(p[0]), int(p[1])]}
-              for j, p in enumerate(ctx.positions) if j != agent and in_box(p, box)]
-
     goal = game.targets[agent]
     goal_visible = settings.goal_display == "visible" or in_box(goal, box)
     goal_proj = None
@@ -71,6 +79,17 @@ def student_view(game: GroupGame, ctx: StepContext, agent: int, settings: RoundS
         # 与 pogema 一致：偏移按轴截断到视野半径。pos 和 goal 都在图内，投影点必在两者之间，也就必在图内
         r = settings.view_radius
         goal_proj = (np.asarray(pos) + np.clip(np.asarray(goal) - np.asarray(pos), -r, r)).astype(int).tolist()
+
+    shared, contacts, comm_part = [], [], None
+    if comm is not None:
+        for j in sorted(comm.shared.get(agent, ())):
+            sbox, srows, sagents = _box_content(game, ctx, j, settings, viewer=agent)
+            shared.append({"agent": int(j), "box": list(sbox), "rows": srows, "agents": sagents})
+        # 可联系的队友：视野内的位置已经在 agents 里；视野外的只给编号（"看不见的同伴也能联系"）
+        contacts = [{"agent": j, "visible": bool(in_box(ctx.positions[j], box)),
+                     "ai_controlled": j in ai_agents}
+                    for j in comm.contacts(agent)]
+        comm_part = comm.student_part(agent)
 
     return {
         "t": int(ctx.t),
@@ -86,6 +105,9 @@ def student_view(game: GroupGame, ctx: StepContext, agent: int, settings: RoundS
         "goal_proj": goal_proj,
         "at_goal": bool(np.array_equal(pos, goal)),
         "legal": [bool(x) for x in ctx.legal[agent]],
+        "shared": shared,
+        "contacts": contacts,
+        "comm": comm_part,
     }
 
 

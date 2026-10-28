@@ -133,6 +133,19 @@ class Database:
             c.commit()
         await self._run(work)
 
+    async def write_comm(self, round_id: int, group_id: int, events: list[dict]):
+        """events：CommEvent.public() 的列表。"""
+        def work():
+            c = self._c()
+            c.executemany(
+                "INSERT INTO comm_event(round_id, group_id, t, from_agent, to_agent, type, payload_json, accepted) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                [(round_id, group_id, e["t"], e["from"], e["to"], e["type"],
+                  None if e["payload"] is None else _dumps(e["payload"]),
+                  None if e["accepted"] is None else int(e["accepted"])) for e in events])
+            c.commit()
+        await self._run(work)
+
     async def end_round(self, round_id: int, metrics: dict):
         await self._run(self._exec, "UPDATE round SET ended_at=?, metrics_json=? WHERE id=?",
                         (time.time(), _dumps(metrics), round_id))

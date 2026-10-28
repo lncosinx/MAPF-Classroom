@@ -14,8 +14,10 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 .players { width: 100%; border-collapse: collapse; font-size: 14px; }
 .players td, .players th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; }
 .players select { font: inherit; padding: 3px 4px; border-radius: 6px; border: 1.5px solid var(--line); }
-.on { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #b0bec5; margin-right: 6px; }
-.on.yes { background: var(--ok); }
+/* 同学在线小圆点。★ 类名别用 .on 这种通用词：.on 同时是按钮"选中"状态的类名，
+   曾把选中的按钮（适应窗口 / 地图工坊标签 / 工具按钮）全压成 9×9 px，文字溢出到右下方 */
+.online-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #b0bec5; margin-right: 6px; }
+.online-dot.yes { background: var(--ok); }
 .players tr.offline td { color: var(--muted); }
 .players .x { border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 2px 6px; border-radius: 6px; }
 .players .x:hover { background: #fde8e6; color: var(--danger); }
@@ -30,3 +32,45 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 .chip.done { background: #d7f2ec; }
 .legend { font-size: 13px; display: flex; gap: 14px; margin-top: 8px; color: var(--muted); }
 .legend i { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+.form .sep { font-weight: 700; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+.kinds { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 18px; }
+.commlog { font-size: 14px; display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+/* 地图缩放 */
+.zoombar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 14px; }
+.zb { border: 1.5px solid var(--line); background: #fff; border-radius: 8px; min-width: 34px; height: 32px; font-size: 18px;
+  line-height: 1; color: var(--text); flex: none; white-space: nowrap; }
+/* "适应窗口"按钮：显式最小宽度（6em ≈ 84px），不靠内容撑宽，避免被压到 34px、文字溢出到旁边的按钮上 */
+.zb.wide { font-size: 14px; padding: 0 12px; min-width: 6em; width: auto; }
+.zoombar > * { flex: 0 0 auto; }
+.zb.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.map-wrap { overflow: auto; border-radius: 8px; }
+.map-wrap.fit { overflow: hidden; }
+/* 标签页 */
+.tabs { display: flex; gap: 6px; }
+.tabs button { border: 0; background: #e8eef2; color: var(--text); border-radius: 10px 10px 0 0; padding: 8px 20px; font-weight: 600; }
+.tabs button.on { background: var(--card); color: var(--accent); box-shadow: var(--shadow); }
+.small { font-size: 13px; }
+.btn.small { padding: 4px 10px; font-size: 13px; }
+/* 课例模板、AI 提示 */
+.tpl { display: flex; gap: 6px; margin-bottom: 6px; }
+.tpl select { flex: 1; font: inherit; padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 8px; }
+.ai-hint { background: #fdf0d5; color: #8a5a00; border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 6px 0 10px; }
+.custom-map { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.players tr[draggable="true"] { cursor: grab; }
+/* 地图工坊 */
+.workshop { display: flex; flex-direction: column; gap: 10px; }
+.ws-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+.ws-row input[type=number] { width: 4.5em; font: inherit; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 6px; }
+.ws-row input:not([type]) { font: inherit; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 6px; }
+.ws-row select { font: inherit; padding: 5px 6px; border: 1.5px solid var(--line); border-radius: 6px; }
+.ws-row .btn { padding: 6px 12px; font-size: 14px; }
+.ws-row .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.tool { border: 1.5px solid var(--line); background: #fff; border-radius: 8px; padding: 5px 10px; white-space: nowrap; }
+.tool.on { border-color: var(--accent); background: #e6f0f7; color: var(--accent); font-weight: 700; }
+.ws-canvas { touch-action: none; cursor: crosshair; border-radius: 8px; overflow: hidden; }
+.ws-check { min-height: 28px; }
+.ok-box { background: #d7f2ec; color: #0b7a6a; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.btn.file { position: relative; overflow: hidden; display: inline-block; cursor: pointer; }
+.btn.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.ws-import { display: flex; flex-direction: column; gap: 6px; }
+.ws-import textarea { font-family: ui-monospace, Consolas, monospace; font-size: 13px; border: 1.5px solid var(--line); border-radius: 8px; padding: 8px; }

@@ -26,11 +26,17 @@
   - `classroom/ai/madcl`（vendor，见其 `VENDORED.md`）、`ModelPolicy`、`lacam.py` + `ExpertPolicy`（含简易专家回退）；
   - `native/lacam`（已删 `make_log`、改 `Threads::Threads`）；
   - 无头 `core/game.py`、`core/metrics.py`、`maps/{generate,validate,library}` + 教学预设图。
-- **M1 代码已完成，待浏览器手测验收**：
+- **M1 已完成**（见 `docs/M1_REPORT.md`，含 WS 协议表和关键口径）：
   - 后端：`core/{settings,views,round,session}.py`、`storage/db.py`、`server/{app,hub,protocol,__main__}.py`；
   - 前端：`static/{shared,student,teacher}/`，以及 `static/vendor/vue.global.prod.js`（3.5.13）；
   - 测试：`tests/test_{views_no_leak,round,server}.py`；冒烟脚本 `tools/play_bots.py`。
-- 下一步：浏览器里走一遍 M1 验收（老师页 + 3 个学生标签页玩完一局），然后做 M2（学生通信）。
+- **M2 已完成**（见 `docs/M2_REPORT.md`）：`core/comm.py`（`CommState`，纯逻辑）、`views.py` 的 `shared` / `contacts` / `comm`、
+  回合机的 `comm_*` 方法、`comm_event` 写库；学生页通信卡片，老师页通信规则、通信图、日志和地图缩放。
+- **M3 代码完成，待浏览器手测**：
+  - 后端：`maps/{mapio,ai_hint}.py`、`library.py` 的用户地图和模板、`presets/lessons.json`、`RoundSettings.custom_map`、`server/teacher_rpc.py`（老师 WS 的 `rpc` 消息）；
+  - 前端：`static/teacher/workshop.js`（地图工坊）、课例模板、拖拽分座位、AI 提示；
+  - 测试：`tests/test_{mapio,library,ai_hint}.py`，以及 `test_server.py` 里的工坊开局端到端测试。
+- 下一步：用户手测 M3 → 写 `docs/M3_REPORT.md` → M4（分组比拼、排行榜、投屏页）。
 - 开发机是 Linux 笔记本（Ryzen 7535H，12 核，无 AVX512），**最终部署在 Windows 老师机上**（见下文"跨平台约束"）。
 - 仓库目前挂载在 `/root/Chameleon/MAPF-Classroom`（Chameleon 仓库目录下），只是临时位置；代码里所有路径都相对仓库根，不依赖 Chameleon。
 
@@ -72,11 +78,13 @@ curl -L -o static/vendor/vue.global.prod.js https://cdn.jsdelivr.net/npm/vue@3.5
 .venv/bin/python -m classroom.server --host 0.0.0.0 --port 8000
 #   启动时打印：学生加入地址 + 终端二维码、老师页（本机直接开；其他设备要带 ?key=）、防火墙提示
 #   老师端 http://localhost:8000/teacher；学生端 http://<本机局域网IP>:8000/
-.venv/bin/python tools/play_bots.py --port 8000 --students 3   # 对运行中的服务：机器人打一局并检查数据库
+.venv/bin/python tools/play_bots.py --port 8766 --students 3   # 对运行中的服务：机器人打一局（含通信）并检查数据库
+#   ⚠️ 冒烟测试要在**单独端口**起临时服务跑：在用户正在用的服务上跑，开着的浏览器标签页会被分到座位上、互相干扰
 #   课堂记录在 data/sessions/<日期时间>.sqlite
 #   ⚠️ 重启服务前确认旧进程真的退出了：端口被占时新进程只打一行 "address already in use" 就退出，
 #   浏览器连的仍是旧代码，看起来像"改了没生效"（2026-10-27 踩过）。不要用 pgrep -f 找进程（会匹配到自己的 shell），
 #   用 `ps -eo pid,cmd | awk '$2 ~ /python/ && $0 ~ /-m classroom.server/'`，并检查启动日志里没有报错
+#   本机 shell 可能设了 http_proxy：用 curl 自检本地服务要加 `--noproxy '*'`，否则代理会回 503，看起来像服务挂了
 
 # M4 起（尚未实现）
 python tools/loadtest.py --students 40 --groups 8 --agents 16   # 压力测试，目标每轮 < 1 s
@@ -230,6 +238,9 @@ numpy 的 float32 `pow` 按指令集分派，足迹通道（ch3）有 27 个衰�
 - [ ] 学生载荷是不是只经由 `core/views.py` 的 `student_view` 生成？（新加字段要同步更新 `tests/test_views_no_leak.py` 的禁用键表）
 - [ ] immediate 揭晓是不是在**结算之后**才发？结算前学生还能改选择，提前揭晓等于让他们照抄
 - [ ] 老师 WS 是不是只放行本机或带正确 `?key=` 的连接？
+- [ ] 学生通信：共享视野只在本步有效、只含对方视野框？可联系列表里视野外的队友有没有带位置？
+- [ ] 推给老师的事件不要用 `{"type": ..., **event}` 展开：事件自己也有 `type` 字段，会把消息类型覆盖掉（M2 踩过）
+- [ ] 观战（在线没座位）的同学是不是也收到开始 / 暂停 / 结束？（`GroupRound.spectator_state`）
 - [ ] 多个组是不是共用了同一个 net 实例？
 - [ ] 每局开始有没有调用 `reset_comm_state()` 和 `builder.reset()`？
 - [ ] `prev_action` 用的是不是实际执行的动作？

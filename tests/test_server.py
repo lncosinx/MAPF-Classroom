@@ -53,6 +53,9 @@ def test_pages_served(client):
                 "/static/student/app.js", "/static/teacher/app.js", "/api/join-qr.svg"):
         assert client.get(url).status_code == 200, url
     assert client.get("/api/join-info").json()["url"].startswith("http://")
+    # 二维码作为 <img> 的独立文件，必须是带命名空间的完整 SVG，否则浏览器显示不出来
+    qr = client.get("/api/join-qr.svg").text
+    assert qr.lstrip().startswith("<svg") and 'xmlns="http://www.w3.org/2000/svg"' in qr
 
 
 def test_static_has_no_external_resources():
@@ -209,3 +212,140 @@ def test_configure_projection_reaches_student(client):
 def test_static_not_stale(client):
     for url in ("/", "/teacher", "/static/shared/grid-renderer.js"):
         assert client.get(url).headers["cache-control"] == "no-cache", url
+
+
+def test_student_comm_over_ws(client):
+    """两个学生：请求 -> 对方同意 -> 双方都拿到共享视野；发消息 -> 对方收件箱有；老师收到事件；数据库有记录。"""
+    with client.websocket_connect(f"/ws/teacher?key={KEY}") as teacher:
+        recv_until(teacher, lambda m: m["type"] == "classroom")
+        teacher.send_json({"type": "configure", "settings": {
+            "preset": "crossroads", "view_radius": 1, "comm_radius": 5.0, "countdown_sec": 60}})
+        recv_until(teacher, lambda m: m["type"] == "classroom" and m["round"]["settings"]["preset"] == "crossroads")
+        with client.websocket_connect("/ws/student") as a, client.websocket_connect("/ws/student") as b:
+            a.send_json({"type": "join", "nickname": "甲", "seat": "1"})
+            pa = recv_until(a, lambda m: m["type"] == "welcome")["player"]["id"]
+            b.send_json({"type": "join", "nickname": "乙", "seat": "2"})
+            pb = recv_until(b, lambda m: m["type"] == "welcome")["player"]["id"]
+            # crossroads：0 号 (0,3) 与 2 号 (3,0) 相距 √18，在半径 5 内
+            teacher.send_json({"type": "assign", "player_id": pa, "agent": 0})
+            teacher.send_json({"type": "assign", "player_id": pb, "agent": 2})
+            teacher.send_json({"type": "start"})
+            va = recv_until(a, lambda m: m["type"] == "state" and "view" in m)["view"]
+            recv_until(b, lambda m: m["type"] == "state" and "view" in m)
+            assert {c["agent"] for c in va["contacts"]} >= {2}
+            assert va["shared"] == []
+            t = va["t"]
+            a.send_json({"type": "view_request", "t": t, "to": 2})
+            vb = recv_until(b, lambda m: m["type"] == "state" and "view" in m and m["view"]["comm"]["requests_in"])["view"]
+            assert vb["comm"]["requests_in"] == [0]
+            b.send_json({"type": "view_answer", "t": t, "from": 0, "accept": True})
+            va = recv_until(a, lambda m: m["type"] == "state" and "view" in m and m["view"]["shared"])["view"]
+            vb = recv_until(b, lambda m: m["type"] == "state" and "view" in m and m["view"]["shared"])["view"]
+            assert [s["agent"] for s in va["shared"]] == [2] and [s["agent"] for s in vb["shared"]] == [0]
+            a.send_json({"type": "message", "t": t, "to": 2, "kind": "go_first"})
+            vb = recv_until(b, lambda m: m["type"] == "state" and "view" in m and m["view"]["comm"]["inbox"])["view"]
+            assert vb["comm"]["inbox"] == [{"t": t, "from": 0, "to": 2, "kind": "go_first"}]
+            # 超出范围回 error（0 号与 1 号 (6,3) 相距 6）
+            a.send_json({"type": "message", "t": t, "to": 1, "kind": "yield"})
+            m = a.receive_json()
+            while m["type"] != "error":
+                m = a.receive_json()
+            assert m["message"] == "对方不在通信范围内"
+            evs = []
+            while len(evs) < 3:
+                m = teacher.receive_json()
+                if m["type"] == "comm_event":
+                    evs.append(m["event"]["type"])
+            assert evs == ["view_request", "view_accept", "msg"]
+            # 两人都提交 -> 结算，shared_view_json 写库
+            a.send_json({"type": "choose", "t": t, "action": 0})
+            b.send_json({"type": "choose", "t": t, "action": 0})
+            recv_until(a, lambda m: m["type"] == "state" and "view" in m and m["view"]["t"] == t + 1)
+            teacher.send_json({"type": "end"})
+            recv_until(a, lambda m: m["type"] == "state" and m["status"] == "finished")
+    con = sqlite3.connect(next(Path(client.tmp_path, "sessions").glob("*.sqlite")))
+    ev = con.execute("SELECT from_agent, to_agent, type, accepted FROM comm_event ORDER BY id").fetchall()
+    sv = dict(con.execute("SELECT agent, shared_view_json FROM step_decision WHERE t=0 AND controller='student'").fetchall())
+    con.close()
+    assert ev == [(0, 2, "view_request", None), (2, 0, "view_accept", 1), (0, 2, "msg", None)]
+    assert [s["agent"] for s in json.loads(sv[0])] == [2] and [s["agent"] for s in json.loads(sv[2])] == [0]
+
+
+def rpc(teacher, method, params, _id=[0]):
+    """发一个老师 RPC，等到对应 id 的回复（中途的快照等消息跳过）。"""
+    _id[0] += 1
+    teacher.send_json({"type": "rpc", "id": _id[0], "method": method, "params": params})
+    while True:
+        m = teacher.receive_json()
+        if m.get("id") == _id[0] and m["type"] in ("rpc_result", "rpc_error"):
+            return m
+
+
+def test_workshop_map_can_start_directly(client):
+    """M3 验收：在地图工坊里做出来的图可以直接开局。"""
+    with client.websocket_connect(f"/ws/teacher?key={KEY}") as teacher:
+        snap = recv_until(teacher, lambda m: m["type"] == "classroom")
+        assert {t["name"] for t in snap["templates"]} >= {"lesson:1", "lesson:4"} and snap["defaults"]["preset"]
+        g = rpc(teacher, "map.generate", {"kind": "random", "width": 10, "height": 8, "density": 0.15, "seed": 4})
+        rows = g["result"]["map"]
+        assert len(rows) == 8 and len(rows[0]) == 10
+        pl = rpc(teacher, "map.place_random", {"map": rows, "n": 3, "seed": 1})["result"]
+        spec = {"title": "工坊测试图", "map": rows, **pl}
+        v = rpc(teacher, "map.validate", {"spec": spec})["result"]
+        assert v["errors"] == []
+        # 起点压在墙上 -> 校验报错
+        wall = next((r, c) for r, row in enumerate(rows) for c, ch in enumerate(row) if ch == "#")
+        bad = {**spec, "agents_xy": [list(wall)] + pl["agents_xy"][1:]}
+        assert any("障碍" in e for e in rpc(teacher, "map.validate", {"spec": bad})["result"]["errors"])
+        assert rpc(teacher, "map.save", {"spec": bad, "title": "坏图"})["type"] == "rpc_error"
+        # 保存 -> 出现在地图库；导出 -> 导入还原
+        name = rpc(teacher, "map.save", {"spec": spec, "title": "工坊测试图"})["result"]["name"]
+        snap = recv_until(teacher, lambda m: m["type"] == "classroom" and any(x["name"] == name for x in m["maps"]))
+        ex = rpc(teacher, "map.export", {"spec": spec})["result"]
+        assert ex["format"] == "pogema"
+        im = rpc(teacher, "map.import", {"text": ex["text"]})["result"]
+        assert im["spec"]["agents_xy"] == pl["agents_xy"] and im["errors"] == []
+        assert rpc(teacher, "map.load", {"name": name})["result"]["spec"]["title"] == "工坊测试图"
+        # 不合法的 custom_map 配置被拒
+        teacher.send_json({"type": "configure", "settings": {"custom_map": bad}})
+        m = teacher.receive_json()
+        while m["type"] != "error":
+            m = teacher.receive_json()
+        # 用工坊的图（未保存版本）直接开局
+        teacher.send_json({"type": "configure", "settings": {"custom_map": spec, "view_radius": 2, "countdown_sec": 60}})
+        snap = recv_until(teacher, lambda m: m["type"] == "classroom" and m["round"]["preset_title"] == "工坊测试图")
+        assert snap["round"]["num_agents"] == 3
+        with client.websocket_connect("/ws/student") as ws:
+            ws.send_json({"type": "join", "nickname": "丁", "seat": "4"})
+            recv_until(ws, lambda m: m["type"] == "welcome")
+            teacher.send_json({"type": "start"})
+            st = recv_until(ws, lambda m: m["type"] == "state" and "view" in m)
+            assert st["view"]["H"] == 8 and st["view"]["W"] == 10
+            assert "custom_map" not in json.dumps(st)     # 整张图不会下发给学生
+            teacher.send_json({"type": "end"})
+        # 删除用户图
+        rpc(teacher, "map.delete", {"name": name})
+        recv_until(teacher, lambda m: m["type"] == "classroom" and all(x["name"] != name for x in m["maps"]))
+        assert rpc(teacher, "map.delete", {"name": "four-rooms"})["type"] == "rpc_error"
+        assert rpc(teacher, "nope", {})["type"] == "rpc_error"
+
+
+def test_ai_hint_in_teacher_state(client):
+    with client.websocket_connect(f"/ws/teacher?key={KEY}") as teacher:
+        recv_until(teacher, lambda m: m["type"] == "classroom")
+        rows = rpc(teacher, "map.generate", {"kind": "maze", "width": 9, "height": 9, "density": 0.5, "seed": 0})["result"]["map"]
+        pl = rpc(teacher, "map.place_random", {"map": rows, "n": 8, "seed": 0})["result"]
+        teacher.send_json({"type": "configure", "settings": {"custom_map": {"map": rows, **pl}}})
+        snap = recv_until(teacher, lambda m: m["type"] == "classroom" and m["round"]["num_agents"] == 8)
+        assert snap["round"]["ai_hint"] and "迷宫" in snap["round"]["ai_hint"]
+
+
+def test_no_bare_state_class_rules():
+    """.on / .active / .sel 这类状态类名会被很多元素同时使用；裸写成规则会误伤别的元素
+    （曾把选中的按钮压成 9×9 px）。状态类必须带限定前缀，例如 .tool.on。"""
+    pat = re.compile(r"(^|[}\s,])\.(on|off|active|sel|selected|yes|no)\s*[{,.:]", re.M)
+    for p in STATIC.rglob("*.css"):
+        if "vendor" in p.parts:
+            continue
+        bad = [m.group(0).strip() for m in pat.finditer(p.read_text(encoding="utf-8"))]
+        assert not bad, f"{p.name}: {bad}"

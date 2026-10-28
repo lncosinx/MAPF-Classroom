@@ -51,5 +51,26 @@ export const ACTIONS = [
   { id: 3, dr: 0, dc: -1, icon: "←", name: "左" },
   { id: 4, dr: 0, dc: 1, icon: "→", name: "右" },
 ];
+// 预设消息（与 classroom/core/settings.py 的 MESSAGE_KINDS 一致）
+export const MESSAGES = {
+  move_up: { icon: "↑", text: "我要往上走" },
+  move_down: { icon: "↓", text: "我要往下走" },
+  move_left: { icon: "←", text: "我要往左走" },
+  move_right: { icon: "→", text: "我要往右走" },
+  yield: { icon: "✋", text: "请让一下" },
+  go_first: { icon: "✅", text: "你先走" },
+  arrived: { icon: "🏁", text: "我到了" },
+};
+
 export const PALETTE = ["#c1433c", "#2e6f9e", "#6e81af", "#00b9c8", "#72D5C8", "#0ea08c", "#8F7B66"];
 export const agentColor = (i) => PALETTE[i % PALETTE.length];
+
+// 指针 / 拖放事件 -> 地图格子。container 里放的是 GridView 渲染出的 <svg>（宽高比与地图一致）。
+export function cellFromEvent(ev, container, H, W) {
+  const svg = container && container.querySelector("svg");
+  if (!svg) return null;
+  const rect = svg.getBoundingClientRect();
+  const c = Math.floor(((ev.clientX - rect.left) / rect.width) * W);
+  const r = Math.floor(((ev.clientY - rect.top) / rect.height) * H);
+  return r >= 0 && r < H && c >= 0 && c < W ? [r, c] : null;
+}

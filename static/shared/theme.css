@@ -14,6 +14,9 @@
   --fog: #cfd8dc;
   --memory: #eef2f4;
   --memory-wall: #b9c9d0;
+  --shared: #e6f6f7;        /* 队友共享来的视野：比迷雾亮、带一点青色 */
+  --shared-wall: #9fb9c3;
+  --contact: #00a3b4;       /* 可联系队友的高亮、消息气泡边框 */
   --accent: #2e6f9e;
   --ok: #0ea08c;
   --warn: #e0a030;

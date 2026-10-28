@@ -1,0 +1,32 @@
+[
+  {
+    "name": "lesson:1",
+    "title": "第 1 课：单人找路",
+    "note": "全图可见、不通信。先熟悉操作：每人把自己的小圆点走到同色旗子上。每步结算后能看到专家和 AI 怎么走。",
+    "settings": {"preset": "four-rooms", "num_agents": 8, "view_radius": null, "goal_display": "visible",
+                 "comm_enabled": false, "reveal_mode": "immediate", "ui_mode": "simple", "countdown_sec": 20}
+  },
+  {
+    "name": "lesson:2",
+    "title": "第 2 课：迷雾中找路",
+    "note": "只看得见身边 2 格，走过的墙会记住；终点在视野外时只显示边上的方向标记。体会 AI 也是这样“看”世界的。",
+    "settings": {"preset": "fog-maze", "view_radius": 2, "fog_mode": "memory", "goal_display": "projection",
+                 "comm_enabled": false, "reveal_mode": "teacher", "countdown_sec": 25}
+  },
+  {
+    "name": "lesson:3",
+    "title": "第 3 课：狭路相逢",
+    "note": "两个房间只有一扇门。视野只有 1 格，要靠交换视野和“请让一下 / 你先走”商量着过门。",
+    "settings": {"preset": "doorway", "view_radius": 1, "fog_mode": "memory", "goal_display": "projection",
+                 "comm_enabled": true, "comm_view_exchange": true, "comm_budget": null, "reveal_mode": "teacher",
+                 "countdown_sec": 30}
+  },
+  {
+    "name": "lesson:4",
+    "title": "第 4 课：团队大挑战",
+    "note": "16 个人一起走，通信每步只能用 2 次——通信是有代价的。结束后再复盘和专家、AI 比一比。",
+    "settings": {"preset": "pogema-logo", "num_agents": 16, "view_radius": 2, "fog_mode": "memory",
+                 "goal_display": "projection", "comm_enabled": true, "comm_budget": 2, "reveal_mode": "review",
+                 "countdown_sec": 25}
+  }
+]

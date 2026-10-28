@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import io
 import logging
 import secrets
 import socket
@@ -22,7 +23,10 @@ from ..core.session import Classroom
 from ..core.settings import RoundSettings
 from ..storage.db import Database
 from .hub import Hub
-from .protocol import Assign, Choose, Configure, Join, Remove, StudentMsg, TeacherMsg
+from . import teacher_rpc
+from ..maps import library
+from .protocol import (Assign, Choose, Configure, Join, Remove, Rpc, SendMessage, StudentMsg, TeacherMsg,
+                       ViewAnswer, ViewRequest)
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "static"
@@ -46,6 +50,8 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
                settings: Optional[RoundSettings] = None, use_db: bool = True) -> FastAPI:
     teacher_key = teacher_key or secrets.token_urlsafe(6)
     data_dir = Path(data_dir) if data_dir else ROOT / "data"
+    # 老师保存的地图和模板：跨课堂长期保存在 <data>/maps/
+    library.set_user_dir(data_dir / "maps")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -90,8 +96,10 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
 
     @app.get("/api/join-qr.svg")
     async def join_qr():
-        svg = segno.make(join_url(), error="m").svg_inline(scale=6, border=2)
-        return Response(svg, media_type="image/svg+xml")
+        # 要完整的 SVG 文档（带 xmlns）：svg_inline() 是给 HTML 内嵌用的片段，作为 <img> 的独立文件浏览器不认
+        buf = io.BytesIO()
+        segno.make(join_url(), error="m").save(buf, kind="svg", scale=6, border=2, xmldecl=False)
+        return Response(buf.getvalue(), media_type="image/svg+xml")
 
     # ------------------------------------------------------------------ 学生
     @app.websocket("/ws/student")
@@ -118,18 +126,25 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
             await ws.send_json({"type": "welcome", "token": player.token, "player": player.public()})
             await room.set_online(pid, True)
             if room.round.agent_of(pid) is None:
-                await ws.send_json({"type": "state", "status": room.round.status, "seated": False,
-                                    "ui_mode": room.round.settings.ui_mode})
+                await ws.send_json(room.round.spectator_state())
             while True:
                 try:
                     msg = StudentMsg.validate_python(await ws.receive_json())
                 except ValidationError:
                     await ws.send_json({"type": "error", "message": "消息格式不对"})
                     continue
+                r = room.round
+                err = None
                 if isinstance(msg, Choose):
-                    err = await room.round.choose(pid, msg.t, msg.action)
-                    if err:
-                        await ws.send_json({"type": "error", "message": err})
+                    err = await r.choose(pid, msg.t, msg.action)
+                elif isinstance(msg, ViewRequest):
+                    err = await r.comm_view_request(pid, msg.t, msg.to)
+                elif isinstance(msg, ViewAnswer):
+                    err = await r.comm_view_answer(pid, msg.t, msg.frm, msg.accept)
+                elif isinstance(msg, SendMessage):
+                    err = await r.comm_message(pid, msg.t, msg.to, msg.kind)
+                if err:
+                    await ws.send_json({"type": "error", "message": err})
         except (WebSocketDisconnect, ValidationError):
             pass
         finally:
@@ -156,6 +171,15 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
                     msg = TeacherMsg.validate_python(await ws.receive_json())
                 except ValidationError as e:
                     await ws.send_json({"type": "error", "message": f"设置不合法：{e.errors()[0]['msg']}"})
+                    continue
+                if isinstance(msg, Rpc):
+                    try:
+                        result = await teacher_rpc.dispatch(msg.method, msg.params)
+                        await ws.send_json({"type": "rpc_result", "id": msg.id, "result": result})
+                        if msg.method in teacher_rpc.MUTATING:
+                            await room.push_teacher()
+                    except ValueError as e:
+                        await ws.send_json({"type": "rpc_error", "id": msg.id, "message": str(e)})
                     continue
                 try:
                     await _teacher_command(room, msg)

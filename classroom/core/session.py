@@ -10,7 +10,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..maps.library import get_preset, list_presets
+from ..maps.library import list_maps, list_templates
 from ..storage.db import Database
 from .round import Broadcaster, GroupRound, get_executor
 from .settings import RoundSettings
@@ -102,8 +102,7 @@ class Classroom:
                 continue
             agent = r.agent_of(p.id)
             if agent is None:
-                await self.out.send_player(p.id, {"type": "state", "status": r.status, "seated": False,
-                                                  "ui_mode": r.settings.ui_mode})
+                await self.out.send_player(p.id, r.spectator_state())
             else:
                 await self.out.send_agent(agent, r.student_state(agent))
 
@@ -168,8 +167,8 @@ class Classroom:
     def teacher_snapshot(self) -> dict:
         r = self.round
         return {"type": "classroom", "players": [p.public() for p in self.players.values()],
-                "presets": [{"name": n, "title": get_preset(n).title} for n in list_presets()],
-                "settings_schema": RoundSettings.model_json_schema(), "round": r.teacher_state()}
+                "maps": list_maps(), "templates": list_templates(),
+                "defaults": RoundSettings().model_dump(), "round": r.teacher_state()}
 
     async def push_teacher(self):
         await self.out.send_teachers(self.teacher_snapshot())
