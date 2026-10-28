@@ -91,3 +91,17 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 .brow .bname { font-weight: 700; }
 .brow .bm { grid-column: 2 / 4; font-size: 12px; color: var(--muted); }
 .brow.ai, .brow.expert { background: transparent; border: 1.5px dashed var(--line); color: var(--muted); }
+/* 复盘 */
+.review { display: flex; flex-direction: column; gap: 10px; }
+.review h3 { font-size: 15px; margin: 8px 0 0; }
+.player { display: flex; align-items: center; gap: 8px; }
+.player input[type=range] { flex: 1; }
+.rtable { width: 100%; border-collapse: collapse; font-size: 14px; }
+.rtable th, .rtable td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+.rtable tr.picked td { background: #e6f0f7; }
+.rtable tr { cursor: pointer; }
+.rtable .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.rtable .act { font-size: 18px; font-weight: 700; }
+.rtable .act.same { color: var(--ok); }
+.probs { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; }
+.probs i { width: 7px; background: #e0a030; border-radius: 2px 2px 0 0; min-height: 1px; }

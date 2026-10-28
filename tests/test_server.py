@@ -410,3 +410,80 @@ def test_two_groups_full_round_and_screen(client):
     con.close()
     assert [n for _, n in groups][:2] == ["第 1 组", "第 2 组"]
     assert len(per) == 2 and all(v == 1 for v in per.values())
+
+
+def _play_to_end(teacher, studs, reveal):
+    teacher.send_json({"type": "configure", "settings": {"preset": "corridor-swap", "reveal_mode": reveal,
+                                                           "countdown_sec": 60, "max_steps": 20, "view_radius": 2}})
+    recv_until(teacher, lambda m: m["type"] == "classroom" and m["round"]["settings"]["reveal_mode"] == reveal)
+    teacher.send_json({"type": "start"})
+    done = [False] * len(studs)
+    for _ in range(100):
+        if all(done):
+            break
+        for i, ws in enumerate(studs):
+            if done[i]:
+                continue
+            m = recv_until(ws, lambda m: m["type"] == "state" and (m["status"] == "finished" or "view" in m), limit=500)
+            if m["status"] == "finished":
+                done[i] = True
+                continue
+            ws.send_json({"type": "choose", "t": m["view"]["t"], "action": greedy(m["view"])})
+
+
+def test_review_export_and_student_review(client):
+    with client.websocket_connect(f"/ws/teacher?key={KEY}") as teacher:
+        recv_until(teacher, lambda m: m["type"] == "classroom")
+        with client.websocket_connect("/ws/student") as a, client.websocket_connect("/ws/student") as b:
+            for ws, nick in ((a, "甲"), (b, "乙")):
+                ws.send_json({"type": "join", "nickname": nick, "seat": "1"})
+                recv_until(ws, lambda m: m["type"] == "welcome")
+            # 「只给老师看」：结束后学生也不能复盘
+            _play_to_end(teacher, [a, b], "teacher")
+            a.send_json({"type": "review"})
+            m = a.receive_json()
+            while m["type"] not in ("error", "review"):
+                m = a.receive_json()
+            assert m["type"] == "error" and "只给老师" in m["message"]
+            # 「赛后复盘」：结束前被拒，结束后拿到的只有自己的行
+            teacher.send_json({"type": "configure", "settings": {"preset": "corridor-swap", "reveal_mode": "review",
+                                                                   "countdown_sec": 60, "max_steps": 20}})
+            recv_until(teacher, lambda m: m["type"] == "classroom" and m["round"]["settings"]["reveal_mode"] == "review")
+            teacher.send_json({"type": "start"})
+            va = recv_until(a, lambda m: m["type"] == "state" and m.get("status") == "playing" and "view" in m, limit=500)
+            recv_until(b, lambda m: m["type"] == "state" and m.get("status") == "playing" and "view" in m, limit=500)
+            a.send_json({"type": "review"})
+            m = a.receive_json()
+            while m["type"] not in ("error", "review"):
+                m = a.receive_json()
+            assert m["type"] == "error" and "结束后" in m["message"]
+            # 走一步再结束（一步没走的局没有记录可复盘）
+            t0 = va["view"]["t"]
+            a.send_json({"type": "choose", "t": t0, "action": 0})
+            b.send_json({"type": "choose", "t": t0, "action": 0})
+            recv_until(a, lambda m: m["type"] == "state" and "view" in m and m["view"]["t"] == t0 + 1, limit=500)
+            teacher.send_json({"type": "end"})
+            recv_until(a, lambda m: m["type"] == "state" and m["status"] == "finished", limit=500)
+            a.send_json({"type": "review"})
+            rv = recv_until(a, lambda m: m["type"] == "review", limit=500)
+            assert rv["steps"] and len({d["agent"] for d in rv["steps"]}) == 1 and "frames" not in rv
+        # 老师 RPC：课 -> 局 -> 复盘数据
+        ss = rpc(teacher, "review.sessions", {})["result"]["sessions"]
+        assert len(ss) == 1 and ss[0]["current"]
+        rounds = rpc(teacher, "review.rounds", {"session": ss[0]["name"]})["result"]["rounds"]
+        assert len(rounds) == 2
+        rep = rpc(teacher, "review.load", {"session": ss[0]["name"], "round": rounds[-1]["id"]})["result"]
+        assert len(rep["frames"]) == rounds[-1]["T"] + 1 and rep["teaching"]
+        assert rpc(teacher, "review.rounds", {"session": "../../etc/passwd"})["type"] == "rpc_error"
+    # 导出：不带 key 被拒（TestClient 不算本机）；带 key 三种格式都能下
+    sess, rid = ss[0]["name"], rounds[-1]["id"]
+    assert client.get(f"/api/export/{sess}/{rid}.csv").status_code == 403
+    r1 = client.get(f"/api/export/{sess}/{rid}.csv?key={KEY}")
+    assert r1.status_code == 200 and r1.headers["content-type"].startswith("text/csv")
+    assert "filename*=UTF-8''" in r1.headers["content-disposition"] and r1.content.startswith(b"\xef\xbb\xbf")
+    r2 = client.get(f"/api/export/{sess}/all.jsonl?key={KEY}")
+    assert r2.status_code == 200 and all(json.loads(x) for x in r2.text.strip().splitlines())
+    r3 = client.get(f"/api/export/{sess}/{rid}.svg?key={KEY}")
+    assert r3.status_code == 200 and r3.headers["content-type"] == "image/svg+xml" and "<svg" in r3.text
+    assert client.get(f"/api/export/{sess}/all.svg?key={KEY}").status_code == 400
+    assert client.get(f"/api/export/..%2F..%2Fx/{rid}.csv?key={KEY}").status_code in (400, 404)

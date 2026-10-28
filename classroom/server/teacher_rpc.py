@@ -6,7 +6,8 @@
 """
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+import asyncio
+from typing import Any, Awaitable, Callable, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -17,6 +18,7 @@ from ..maps.ai_hint import ai_hint
 from ..maps.generate import KINDS, generate, random_pairs
 from ..maps.mapio import MAX_AGENTS, MAX_SIDE, MapSpec, export_text, parse_text
 from ..maps.validate import validate_instance
+from ..storage import review
 
 # 会改动地图库 / 模板列表的方法：返回后要推快照
 MUTATING = {"map.save", "map.delete", "template.save", "template.delete"}
@@ -51,7 +53,13 @@ def check_spec(spec: MapSpec) -> dict:
     return {"errors": errors, "ai_hint": ai_hint(grid, len(spec.agents_xy)) if not errors else None}
 
 
-async def dispatch(method: str, params: dict) -> Any:
+async def dispatch(method: str, params: dict, ctx: Optional[dict] = None) -> Any:
+    """ctx：{"data_dir": 数据目录, "current": 本节课的库文件}（复盘方法要用）。"""
+    if method.startswith("review."):
+        fn = REVIEW_METHODS.get(method)
+        if fn is None:
+            raise ValueError(f"不支持的操作：{method}")
+        return await fn(params or {}, ctx or {})
     fn = METHODS.get(method)
     if fn is None:
         raise ValueError(f"不支持的操作：{method}")
@@ -154,4 +162,30 @@ METHODS: dict[str, Callable[[dict], Awaitable[Any]]] = {
     "map.export": _export,
     "template.save": _template_save,
     "template.delete": _template_delete,
+}
+
+
+# ---------------------------------------------------------------- 复盘（读课堂记录，放到线程里，不卡事件循环）
+async def _review_sessions(p: dict, ctx: dict):
+    return {"sessions": await asyncio.to_thread(review.list_sessions, ctx["data_dir"], ctx.get("current"))}
+
+
+async def _review_rounds(p: dict, ctx: dict):
+    path = review.session_path(ctx["data_dir"], str(p.get("session", "")))
+    return {"rounds": await asyncio.to_thread(review.list_rounds, path)}
+
+
+async def _review_load(p: dict, ctx: dict):
+    path = review.session_path(ctx["data_dir"], str(p.get("session", "")))
+    try:
+        rid = int(p.get("round"))
+    except (TypeError, ValueError):
+        raise ValueError("要指定哪一局") from None
+    return await asyncio.to_thread(review.load_replay, path, rid)
+
+
+REVIEW_METHODS: dict[str, Callable[[dict, dict], Awaitable[Any]]] = {
+    "review.sessions": _review_sessions,
+    "review.rounds": _review_rounds,
+    "review.load": _review_load,
 }

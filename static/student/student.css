@@ -64,3 +64,6 @@
 .simple .msg { justify-content: center; min-height: 56px; }
 .simple .msg .ic { font-size: 28px; }
 .log { margin-top: 10px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+
+/* 赛后复盘 */
+.review-wrap { margin-top: 16px; }

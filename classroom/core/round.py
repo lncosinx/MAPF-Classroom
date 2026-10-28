@@ -444,6 +444,8 @@ class GroupRound:
         if self.status == "finished":
             msg["metrics"] = self.metrics
             msg["at_goal"] = bool(self.game.at_goal()[agent])
+            # 赛后复盘 / 立即揭晓模式下，学生可以复盘自己的每一步（"只给老师看"时不行，不变式 8）
+            msg["can_review"] = self.settings.reveal_mode in ("review", "immediate") and self.game.t > 0
         return msg
 
     def teacher_state(self) -> dict:

@@ -1,6 +1,6 @@
 // 学生端：加入 → 等待老师开始 → 每步选一个方向（倒计时内可以改）→ 终局看结果。
 // 服务器是唯一权威：这里只画服务端下发的视野，不做任何本地推演。
-import { Connection, store, tabStore, ACTIONS, MESSAGES } from "/static/shared/ws.js";
+import { Connection, store, tabStore, ACTIONS, MESSAGES, agentColor } from "/static/shared/ws.js";
 import { GridView } from "/static/shared/grid-renderer.js";
 
 const { createApp, reactive, computed, onMounted, onBeforeUnmount } = Vue;
@@ -19,6 +19,7 @@ createApp({
       now: performance.now(), reveal: null, metrics: null, atGoal: false, maxSteps: 128, toast: "",
       commTarget: null,   // 正在和谁通信（打开了操作卡）
       groupName: null,    // 分组比拼时的组名
+      canReview: false, review: null, rt: 0,   // 赛后复盘：服务端给的自己的记录、当前看到第几步
     });
     let toastTimer = null;
     const showToast = (m) => { st.toast = m; clearTimeout(toastTimer); toastTimer = setTimeout(() => (st.toast = ""), 2200); };
@@ -45,11 +46,14 @@ createApp({
         st.countdownMs = m.countdown_ms ?? null; st.receivedAt = performance.now();
         if (m.countdown_total_ms) st.countdownTotal = m.countdown_total_ms;
         if (m.max_steps) st.maxSteps = m.max_steps;
-        if (m.status === "finished") { st.metrics = m.metrics; st.atGoal = !!m.at_goal; }
+        if (m.status === "finished") { st.metrics = m.metrics; st.atGoal = !!m.at_goal; st.canReview = !!m.can_review; }
+        if (m.status !== "finished") { st.canReview = false; st.review = null; }
         if (m.status === "lobby") { st.metrics = null; st.reveal = null; st.view = null; }
       } else if (m.type === "progress") {
         st.progress = { submitted: m.submitted, total: m.total };
         if (st.view && m.t === st.view.t) st.myChoice = m.my_choice;
+      } else if (m.type === "review") {
+        st.review = m; st.rt = 0;
       } else if (m.type === "reveal") {
         st.reveal = m;
       } else if (m.type === "kicked") {
@@ -189,7 +193,32 @@ createApp({
     }
     const icon = (a) => (a == null ? "—" : ACTIONS[a].icon);
 
-    return { st, phase, choose, scene, onCell, remainingMs, ring, PAD, ACTIONS, icon, join,
+    // ---- 赛后复盘（只有自己的步）
+    const askReview = () => conn && conn.send({ type: "review" });
+    const rstep = computed(() => (st.review ? st.review.steps[st.rt] : null));
+    const reviewScene = computed(() => {
+      const rv = st.review;
+      if (!rv) return null;
+      const s = rv.steps[st.rt];
+      const me = s.agent;
+      // 自己的轨迹：每一步的起点连起来
+      const links = [];
+      for (let i = 0; i < rv.steps.length; i++) {
+        const d = rv.steps[i];
+        if (d.agent === me && (d.pos_before[0] !== d.pos_after[0] || d.pos_before[1] !== d.pos_after[1]))
+          links.push({ a: d.pos_before, b: d.pos_after, color: i <= st.rt ? "#c1433c" : "#d9c3c1" });
+      }
+      const g = rv.goals[me];
+      const arrows = [{ r: s.pos_before[0], c: s.pos_before[1], action: s.action, color: "var(--self)" }];
+      if (s.expert != null) arrows.push({ r: s.pos_before[0], c: s.pos_before[1], action: s.expert, color: "#0ea08c", len: 0.3 });
+      return { H: rv.map.length, W: rv.map[0].length, cells: rv.map, links,
+               agents: [{ id: me, r: s.pos_before[0], c: s.pos_before[1], color: "var(--self)", self: true }],
+               goals: g ? [{ id: me, r: g[0], c: g[1], color: "var(--self)", self: true }] : [], arrows, stepKey: st.rt };
+    });
+    const myStats = computed(() => (st.review && st.review.teaching[0]) || null);
+    const pctTxt = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+
+    return { askReview, rstep, reviewScene, myStats, pctTxt, st, phase, choose, scene, onCell, remainingMs, ring, PAD, ACTIONS, icon, join,
              contacts, comm, openComm, requestView, answerView, sendMsg, budgetDots, sharedWith, msgLine, MESSAGES };
   },
   template: `
@@ -331,6 +360,32 @@ createApp({
           <div><b>{{ st.metrics.makespan }}</b>全队用时（步）</div>
           <div><b>{{ st.metrics.SoC }}</b>总步数</div>
           <div><b>{{ st.metrics.CSR === 1 ? '是' : '否' }}</b>全员到达</div>
+        </div>
+        <button v-if="st.canReview && !st.review" class="btn" style="margin-top:14px;width:100%" @click="askReview">🔍 复盘我的每一步</button>
+      </div>
+    </div>
+    <div v-if="phase === 'ended' && st.review" class="review-wrap">
+      <div class="play">
+        <div class="card map-card"><GridView :scene="reviewScene"/></div>
+        <div class="side">
+          <div class="card">
+            <div class="muted small">第 {{ rstep.t + 1 }} 步（共 {{ st.review.steps.length }} 步由你控制）</div>
+            <input type="range" min="0" :max="st.review.steps.length - 1" v-model.number="st.rt" style="width:100%">
+            <div class="reveal" style="margin-top:8px">
+              <div class="col"><div class="lbl">你{{ rstep.timed_out ? '（超时）' : '' }}</div><div class="act">{{ icon(rstep.action) }}</div></div>
+              <div class="col"><div class="lbl">专家</div><div :class="['act', { same: rstep.expert === rstep.action }]">{{ icon(rstep.expert) }}</div></div>
+              <div class="col"><div class="lbl">AI</div><div :class="['act', { same: rstep.ai === rstep.action }]">{{ icon(rstep.ai) }}</div></div>
+            </div>
+            <p class="muted small" v-if="rstep.think_ms != null">这一步你想了 {{ (rstep.think_ms / 1000).toFixed(1) }} 秒</p>
+          </div>
+          <div class="card" v-if="myStats">
+            <div class="metrics">
+              <div><b>{{ pctTxt(myStats.expert_rate) }}</b>和专家一样</div>
+              <div><b>{{ pctTxt(myStats.ai_rate) }}</b>和 AI 一样</div>
+              <div><b>{{ myStats.avg_think_ms == null ? '—' : (myStats.avg_think_ms / 1000).toFixed(1) + '秒' }}</b>平均思考</div>
+              <div><b>{{ myStats.waits }} / {{ myStats.blocked }}</b>停下 / 被挡</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

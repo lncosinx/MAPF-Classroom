@@ -15,6 +15,8 @@
 //   sharedBoxes[]        {box, color}                      队友共享来的视野框（细实线）
 //   bubbles[]            {r, c, text}                      消息气泡（显示在发送者头上）
 //   clickable            点击格子时发出 cell 事件；点击带 contact 的智能体发出 agent 事件
+//   stepKey              当前是第几步。智能体换位置有 250 ms 补间，叠加层（箭头 / 连线 / 气泡）却是按新位置直接画的，
+//                        会比智能体先到。给了 stepKey 时，叠加层随步号重建，并等智能体走到位后再淡入（.after-move）
 const { computed } = Vue;
 
 const S = 40; // 每格的用户坐标单位
@@ -63,7 +65,8 @@ export const GridView = {
       return { ...a, p, key: i };
     }));
     const rectOf = (b) => ({ x: b[1] * S + 1.5, y: b[0] * S + 1.5, w: (b[3] - b[1] + 1) * S - 3, h: (b[2] - b[0] + 1) * S - 3 });
-    return { S: S_, cellList, arrows, rectOf, goalMarks };
+    const sk = computed(() => (props.scene.stepKey == null ? "" : String(props.scene.stepKey)));
+    return { S: S_, cellList, arrows, rectOf, goalMarks, sk };
   },
   template: `
   <svg class="grid-svg" :viewBox="'0 0 ' + scene.W * S + ' ' + scene.H * S" xmlns="http://www.w3.org/2000/svg"
@@ -91,11 +94,11 @@ export const GridView = {
             :r="c.radius * S" :fill="c.color" fill-opacity="0.05" :stroke="c.color" stroke-width="1.5"
             stroke-dasharray="3 5" opacity="0.7"/>
     <!-- 学生通信连线 -->
-    <line v-for="(e, i) in (scene.links || [])" :key="'l' + i" :x1="(e.a[1] + 0.5) * S" :y1="(e.a[0] + 0.5) * S"
+    <line v-for="(e, i) in (scene.links || [])" :key="'l' + sk + '-' + i" :class="{ 'after-move': sk !== '' }" :x1="(e.a[1] + 0.5) * S" :y1="(e.a[0] + 0.5) * S"
           :x2="(e.b[1] + 0.5) * S" :y2="(e.b[0] + 0.5) * S" :stroke="e.color" stroke-width="3" opacity="0.75"
           stroke-linecap="round" :stroke-dasharray="e.dashed ? '6 5' : null"/>
     <!-- AI 通信边 -->
-    <line v-for="(e, i) in (scene.edges || [])" :key="'e' + i" :x1="(e.a[1] + 0.5) * S" :y1="(e.a[0] + 0.5) * S"
+    <line v-for="(e, i) in (scene.edges || [])" :key="'e' + sk + '-' + i" :class="{ 'after-move': sk !== '' }" :x1="(e.a[1] + 0.5) * S" :y1="(e.a[0] + 0.5) * S"
           :x2="(e.b[1] + 0.5) * S" :y2="(e.b[0] + 0.5) * S" stroke="var(--c3)" stroke-width="2" opacity="0.55"/>
     <!-- 智能体 -->
     <g v-for="a in (scene.agents || [])" :key="'a' + a.id" class="agent"
@@ -132,7 +135,7 @@ export const GridView = {
       </template>
     </g>
     <!-- 动作箭头 -->
-    <g v-for="a in arrows" :key="'ar' + a.key" :opacity="a.opacity || 0.9">
+    <g v-for="a in arrows" :key="'ar' + sk + '-' + a.key" :opacity="a.opacity || 0.9" :class="{ 'after-move': sk !== '' }">
       <template v-if="a.p">
         <line :x1="a.p.line.x1" :y1="a.p.line.y1" :x2="a.p.line.x2" :y2="a.p.line.y2" :stroke="a.color"
               stroke-width="4" stroke-linecap="round" :stroke-dasharray="a.dashed ? '4 4' : null"/>
@@ -141,7 +144,7 @@ export const GridView = {
       <rect v-else :x="(a.c + 0.5) * S - 6" :y="(a.r + 0.5) * S - 6" width="12" height="12" rx="2" :fill="a.color"/>
     </g>
     <!-- 消息气泡 -->
-    <g v-for="(b, i) in (scene.bubbles || [])" :key="'bu' + i"
+    <g v-for="(b, i) in (scene.bubbles || [])" :key="'bu' + sk + '-' + i" :class="{ 'after-move': sk !== '' }"
        :transform="'translate(' + ((b.c + 0.5) * S) + ',' + (b.r * S - 4) + ')'">
       <rect :x="-S * 0.5" :y="-S * 0.62" :width="S" :height="S * 0.58" rx="9" fill="#fff" stroke="var(--contact)" stroke-width="1.5"/>
       <path :d="'M-5,' + (-S * 0.05) + ' L0,4 L5,' + (-S * 0.05) + ' z'" fill="#fff" stroke="var(--contact)" stroke-width="1.5"/>

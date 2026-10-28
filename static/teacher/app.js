@@ -3,6 +3,7 @@
 import { Connection, ACTIONS, MESSAGES, agentColor, store, cellFromEvent } from "/static/shared/ws.js";
 import { GridView } from "/static/shared/grid-renderer.js";
 import { MapWorkshop } from "/static/teacher/workshop.js";
+import { ReviewPanel } from "/static/teacher/review.js";
 
 const { createApp, reactive, computed, ref, nextTick, onMounted, onBeforeUnmount } = Vue;
 
@@ -21,7 +22,7 @@ const OPTIONS = {
 const STATUS = { lobby: "未开始", playing: "进行中", paused: "暂停", finished: "已结束" };
 
 createApp({
-  components: { GridView, MapWorkshop },
+  components: { GridView, MapWorkshop, ReviewPanel },
   setup() {
     const st = reactive({
       online: false, denied: false, players: [], maps: [], templates: [], defaults: null, joinUrl: "",
@@ -239,7 +240,7 @@ createApp({
         }
       }
       const edges = st.show.edges && v.ai_edges ? v.ai_edges.filter(([i, j]) => i < j).map(([i, j]) => ({ a: v.positions[i], b: v.positions[j] })) : [];
-      return { H: v.H, W: v.W, cells: v.map, agents, goals, arrows, boxes, edges, circles, links };
+      return { H: v.H, W: v.W, cells: v.map, agents, goals, arrows, boxes, edges, circles, links, stepKey: v.t };
     });
     const icon = (a) => (a == null ? "—" : ACTIONS[a].icon);
 
@@ -289,7 +290,7 @@ createApp({
       return e.type;
     }
 
-    return { nextTickMeasure, seatValue, groupLabel, setScreenLive, multi, STATUS_SHORT, thumbScene, fmtMetric, toast, rpc, pickPreset, useWorkshopMap, currentTemplate, loadTemplate, saveTemplate, deleteTemplate,
+    return { keyParam: key || "", nextTickMeasure, seatValue, groupLabel, setScreenLive, multi, STATUS_SHORT, thumbScene, fmtMetric, toast, rpc, pickPreset, useWorkshopMap, currentTemplate, loadTemplate, saveTemplate, deleteTemplate,
              onDragStart, onDropMap, eventText, zoomStep, setZoom, mapStyle, wrapStyle, zoomLabel, mapWrap, st, r, status, scene, remaining, OPTIONS, STATUS, applySettings, cmd, assign, agentOfPlayer,
              removePlayer, removeOffline, sortedPlayers, offlineCount, MESSAGES,
              playerOfAgent, agentColor, icon };
@@ -426,6 +427,11 @@ createApp({
         <div class="tabs">
           <button :class="{ on: st.tab === 'class' }" @click="st.tab = 'class'">课堂</button>
           <button :class="{ on: st.tab === 'workshop' }" @click="st.tab = 'workshop'">地图工坊</button>
+          <button :class="{ on: st.tab === 'review' }" @click="st.tab = 'review'">复盘</button>
+        </div>
+        <!-- 每次切到复盘都重新挂载：读到最新的课堂记录 -->
+        <div v-if="st.tab === 'review'" class="card">
+          <ReviewPanel :rpc="rpc" :key-param="keyParam" @toast="toast"/>
         </div>
         <div v-show="st.tab === 'workshop'" class="card">
           <MapWorkshop :rpc="rpc" :maps="st.maps" :can-use="status !== 'playing' && status !== 'paused'"

@@ -46,7 +46,12 @@ class SendMessage(BaseModel):
     kind: MessageKind
 
 
-StudentMsg = TypeAdapter(Annotated[Union[Join, Choose, ViewRequest, ViewAnswer, SendMessage],
+class Review(BaseModel):
+    """一局结束后，学生请求复盘自己的每一步（只在赛后复盘 / 立即揭晓模式下允许）。"""
+    type: Literal["review"]
+
+
+StudentMsg = TypeAdapter(Annotated[Union[Join, Choose, ViewRequest, ViewAnswer, SendMessage, Review],
                                    Field(discriminator="type")])
 
 

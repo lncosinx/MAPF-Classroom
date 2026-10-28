@@ -34,9 +34,11 @@
   回合机的 `comm_*` 方法、`comm_event` 写库；学生页通信卡片，老师页通信规则、通信图、日志和地图缩放。
 - **M3 已完成**（见 `docs/M3_REPORT.md`，含 RPC 方法表）：`maps/{mapio,ai_hint}.py`、地图库和模板、`custom_map`、
   `server/teacher_rpc.py`、`static/teacher/workshop.js`、课例模板、拖拽分座位、AI 提示。
-- **M4 代码完成，压测通过，待浏览器手测**：`core/{leaderboard,reference}.py`；`session.py` 重构为多组（每组一个 `GroupOut`，智能体编号只在组内有意义）；
+- **M4 已完成**（见 `docs/M4_REPORT.md`，含压测和 LaCAM 时限实测）：`core/{leaderboard,reference}.py`；`session.py` 重构为多组（每组一个 `GroupOut`，智能体编号只在组内有意义）；
   `/screen` + `/ws/screen`；老师页组切换、排行榜、投屏开关；`tools/loadtest.py`（8 组 × 16 体、40 人：p95 66 ms）。
-- 下一步：用户手测 M4 → 写 `docs/M4_REPORT.md` → M5（复盘与导出）。
+- **M5 代码完成，待浏览器手测**：`storage/{review,export}.py`；老师 RPC 的 `review.*` 方法；`/api/export/{课}/{局|all}.{csv|jsonl|svg}`（鉴权同老师 WS）；
+  学生 WS 的 `review` 消息；老师页"复盘"标签（`static/teacher/review.js`）、学生结束页的"复盘我的每一步"；测试 `tests/test_review.py`。
+- 下一步：用户手测 M5 → 写 `docs/M5_REPORT.md` → M6（简洁 / 进阶两种模式 + 动效打磨）。
 - 开发机是 Linux 笔记本（Ryzen 7535H，12 核，无 AVX512），**最终部署在 Windows 老师机上**（见下文"跨平台约束"）。
 - 仓库目前挂载在 `/root/Chameleon/MAPF-Classroom`（Chameleon 仓库目录下），只是临时位置；代码里所有路径都相对仓库根，不依赖 Chameleon。
 
@@ -244,6 +246,8 @@ numpy 的 float32 `pow` 按指令集分派，足迹通道（ch3）有 27 个衰�
 - [ ] 观战（在线没座位）的同学是不是也收到开始 / 暂停 / 结束？（`GroupRound.spectator_state`）
 - [ ] 多组时：发给学生的消息有没有走**本组**的 `GroupOut`？智能体编号只在组内有意义，别用全局表查人
 - [ ] 投屏载荷（`Classroom.screen_state`）在比赛中、没开"显示全图"时，是不是不含任何地图 / 位置 / 目标？
+- [ ] 读课堂记录时有没有先用 `review.session_path` 核对文件名（防路径穿越）？用的是不是只读连接？
+- [ ] 导出 CSV 是不是 utf-8-sig？（少了 BOM，Windows Excel 打开中文就乱码）
 - [ ] 多个组是不是共用了同一个 net 实例？
 - [ ] 每局开始有没有调用 `reset_comm_state()` 和 `builder.reset()`？
 - [ ] `prev_action` 用的是不是实际执行的动作？

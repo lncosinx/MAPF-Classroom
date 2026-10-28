@@ -5,8 +5,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+from urllib.parse import quote
 import secrets
 import socket
 from contextlib import asynccontextmanager
@@ -14,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import segno
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -25,7 +27,8 @@ from ..storage.db import Database
 from .hub import Hub
 from . import teacher_rpc
 from ..maps import library
-from .protocol import (Assign, Choose, Configure, Join, Remove, Rpc, Screen, SendMessage, StudentMsg,
+from ..storage import export, review
+from .protocol import (Assign, Choose, Configure, Join, Remove, Review, Rpc, Screen, SendMessage, StudentMsg,
                        TeacherMsg, ViewAnswer, ViewRequest)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +96,32 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
     def join_url() -> str:
         return f"http://{lan_ip()}:{app.state.port}/"
 
+    def teacher_ok(host: str, key: Optional[str]) -> bool:
+        return host in LOCAL_HOSTS or bool(key and secrets.compare_digest(key, app.state.teacher_key))
+
+    @app.get("/api/export/{session}/{target}")
+    async def export_file(session: str, target: str, request: Request):
+        """下载课堂记录：<局号|all>.<csv|jsonl|svg>。只有老师能下（本机或带 key）。"""
+        if not teacher_ok(request.client.host if request.client else "", request.query_params.get("key")):
+            return JSONResponse({"error": "只有老师能导出"}, status_code=403)
+        stem, _, ext = target.rpartition(".")
+        try:
+            path = review.session_path(data_dir, session)
+            rid = None if stem == "all" else int(stem)
+            if ext == "csv":
+                body, mime = await asyncio.to_thread(export.to_csv, path, rid), "text/csv; charset=utf-8"
+            elif ext == "jsonl":
+                body, mime = await asyncio.to_thread(export.to_jsonl, path, rid), "application/x-ndjson; charset=utf-8"
+            elif ext == "svg" and rid is not None:
+                body, mime = await asyncio.to_thread(export.to_svg, path, rid), "image/svg+xml"
+            else:
+                return JSONResponse({"error": "不支持的导出格式"}, status_code=400)
+        except (ValueError, export.ReplayMismatch) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        name = f"MAPF课堂-{Path(session).stem}-{'全部' if rid is None else f'第{rid}局'}.{ext}"
+        return Response(body, media_type=mime,
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
     @app.get("/api/join-info")
     async def join_info():
         return JSONResponse({"url": join_url()})
@@ -151,6 +180,8 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
                     err = await r.comm_view_answer(pid, msg.t, msg.frm, msg.accept)
                 elif isinstance(msg, SendMessage):
                     err = await r.comm_message(pid, msg.t, msg.to, msg.kind)
+                elif isinstance(msg, Review):
+                    err = await _student_review(app, r, pid, ws)
                 if err:
                     await ws.send_json({"type": "error", "message": err})
         except (WebSocketDisconnect, ValidationError):
@@ -199,7 +230,8 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
                     continue
                 if isinstance(msg, Rpc):
                     try:
-                        result = await teacher_rpc.dispatch(msg.method, msg.params)
+                        ctx = {"data_dir": data_dir, "current": app.state.db.path if app.state.db else None}
+                        result = await teacher_rpc.dispatch(msg.method, msg.params, ctx)
                         await ws.send_json({"type": "rpc_result", "id": msg.id, "result": result})
                         if msg.method in teacher_rpc.MUTATING:
                             await room.push_teacher()
@@ -241,3 +273,23 @@ async def _teacher_command(room: Classroom, msg):
         await room.shuffle()
     elif msg.type == "refresh":
         await room.push_teacher()
+
+
+REVIEW_ALLOWED = ("review", "immediate")
+
+
+async def _student_review(app: FastAPI, r, pid: int, ws: WebSocket) -> Optional[str]:
+    """学生复盘自己：本局已结束、揭晓模式允许、且这一局里有他的记录。"""
+    if r.settings.reveal_mode not in REVIEW_ALLOWED:
+        return "这节课的建议只给老师看，不能复盘"
+    if r.status != "finished":
+        return "这一局结束后才能复盘"
+    db = app.state.db
+    if db is None or r.round_id is None:
+        return "这一局没有记录"
+    try:
+        data = await asyncio.to_thread(review.student_replay, db.path, r.round_id, pid)
+    except ValueError as e:
+        return str(e)
+    await ws.send_json({"type": "review", **data})
+    return None
