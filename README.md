@@ -4,7 +4,7 @@
 
 **把多智能体路径规划搬进教室：每个学生控制一个智能体，和 AI 队友一起把大家都送到终点。**
 
-[![Release](https://img.shields.io/github/v/release/lncosinx/MAPF-Classroom?label=下载&color=0ea08c)](https://github.com/lncosinx/MAPF-Classroom/releases/latest)
+[![Release](https://img.shields.io/github/v/release/lncosinx/MAPF-Classroom?label=下载&color=0ea08c&cacheSeconds=3600)](https://github.com/lncosinx/MAPF-Classroom/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2e6f9e)](LICENSE)
 ![Windows](https://img.shields.io/badge/老师机-Windows%2010%20%2F%2011-6e81af)
 ![Python](https://img.shields.io/badge/Python-3.12-c1433c)
