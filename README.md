@@ -120,7 +120,7 @@ sequenceDiagram
 ```
 
 - **环境**：[POGEMA](https://github.com/Cognitive-AI-Systems/pogema)，和模型的训练、评测用同一套规则（`on_target=nothing`、软碰撞）；
-- **AI 队友**：MADCL，带 FOV 内软稀疏通信的循环网络。主模型 7.45M 参数，另有 2.16M 的轻量版给配置低的电脑；
+- **AI 队友**：MADCL，带 FOV 内软稀疏通信的循环网络，来自 [Chameleon](https://github.com/lncosinx/Chameleon)（模型结构、训练方法和权重都在那里）。主模型 7.45M 参数，另有 2.16M 的轻量版给配置低的电脑；
 - **专家**：[LaCAM3](https://github.com/Kei18/lacam3)，每步从当前状态重新求解，只取第一步；
 - **前端**：Vue 3（打包在仓库里，没有构建步骤，不引用外网资源）+ 手写 SVG 地图，老师页、学生页、投屏页共用一套绘制代码。
 
@@ -158,6 +158,7 @@ tests/       单元测试 + 对拍     docs/        各里程碑的验收报告
 
 ## 🙏 致谢
 
+- [**Chameleon**](https://github.com/lncosinx/Chameleon)：AI 队友 MADCL 的来源。`classroom/ai/madcl/` 里的模型代码和 `weights/` 里的权重都出自那里，具体见 `classroom/ai/madcl/VENDORED.md`
 - [POGEMA](https://github.com/Cognitive-AI-Systems/pogema) 和 pogema-toolbox 的地图生成器（MIT）
 - [LaCAM3](https://github.com/Kei18/lacam3)（Keisuke Okumura，MIT），代码取自 [MAPF-GPT](https://github.com/Cognitive-AI-Systems/MAPF-GPT) 的绑定
 - [Vue.js](https://vuejs.org/)、[FastAPI](https://fastapi.tiangolo.com/)、[PyTorch](https://pytorch.org/)、[segno](https://github.com/heuer/segno)
