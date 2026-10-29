@@ -215,5 +215,10 @@ h2.with-tool { display: flex; align-items: center; }
 .rv-side { display: flex; flex-direction: column; gap: 16px; }
 .rv-side .card h2 { margin-top: 0; }
 .rtable-wrap { overflow-x: auto; }
+/* 每个智能体 / 教学指标：卡片内限高、上下左右都在卡片里滚（滚到头不带动左栏和整页），表头固定在顶上 */
+.rv-scroll-steps, .rv-scroll-teach { overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.rv-scroll-steps { max-height: min(420px, 45vh); }
+.rv-scroll-teach { max-height: min(300px, 32vh); }
+.rv-scroll-steps .rtable th, .rv-scroll-teach .rtable th { position: sticky; top: 0; background: var(--card); z-index: 1; }
 .rv-side .rtable { font-size: 13px; }
 .rv-side .rtable th, .rv-side .rtable td { padding: 5px 5px; white-space: nowrap; }

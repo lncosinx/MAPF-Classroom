@@ -126,7 +126,7 @@ export const ReviewSide = {
       <h2>{{ rv.data ? (rv.t < T ? '第 ' + (rv.t + 1) + ' 步' : '终局') + ' · 每个智能体' : '每个智能体' }}</h2>
       <p v-if="!rv.data" class="muted small">{{ rv.loading ? '正在读取……' : '先在中间选一局。' }}</p>
       <template v-else>
-        <div class="rtable-wrap">
+        <div class="rtable-wrap rv-scroll-steps">
           <table v-if="stepRows.length" class="rtable">
             <tr><th>智能体</th><th>谁在控制</th><th>实际</th><th>专家</th><th>AI</th><th>AI 的把握</th><th>思考</th></tr>
             <tr v-for="s in stepRows" :key="s.agent" :class="{ picked: rv.sel === s.agent }" @click="pick(s.agent)">
@@ -150,7 +150,7 @@ export const ReviewSide = {
     </div>
     <div v-if="rv.data" class="card">
       <h2>教学指标 <span class="muted small">只统计学生控制的步</span></h2>
-      <div v-if="rv.data.teaching.length" class="rtable-wrap">
+      <div v-if="rv.data.teaching.length" class="rtable-wrap rv-scroll-teach">
         <table class="rtable">
           <tr><th>智能体</th><th>同学</th><th>步数</th><th>和专家一致</th><th>和 AI 一致</th><th>平均思考</th><th>等待</th><th>被挡</th><th>超时</th><th>通信</th></tr>
           <tr v-for="m in rv.data.teaching" :key="m.agent" :class="{ picked: rv.sel === m.agent }" @click="pick(m.agent)">
