@@ -1,0 +1,15 @@
+# Windows 绿色包的运行期依赖（M7）。版本和 requirements.txt 一致；不含 pytest / httpx 这类开发用的包。
+# build_windows.py 用 pip install --target --platform win_amd64 --only-binary=:all: 装进嵌入式 Python 的 site-packages，
+# torch 走 https://download.pytorch.org/whl/cpu。pogema 单独 --no-deps 装 third_party/wheels 里的 wheel。
+torch==2.8.0
+numpy==2.3.2
+pydantic==2.13.4
+gymnasium==1.3.0
+pyyaml==6.0.2
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+segno==1.6.6
+websockets==17.3
+# Windows 版 torch 要 msvcp140.dll 等 VC 运行库，嵌入式 Python 只自带 vcruntime140*.dll。
+# 这个包只是一组 DLL，构建脚本把它们挪到 python.exe 旁边，老师机就不用另装 VC 运行库
+msvc-runtime

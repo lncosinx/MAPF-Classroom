@@ -60,8 +60,32 @@ def lan_ip() -> str:
         s.close()
 
 
+def usable_ip(ip: str) -> bool:
+    """能给学生用的 IPv4：去掉回环（127.*）和"没拿到地址"时系统自配的 169.254.*。"""
+    return ip.count(".") == 3 and not ip.startswith(("127.", "169.254.", "0."))
+
+
+def lan_ips() -> list[str]:
+    """本机所有可用的局域网 IPv4。老师机常有 VMware / Hyper-V 虚拟网卡，UDP 探测选中的不一定是学生所在的网，
+    启动时把候选地址都打印出来，选错了可以用 --ip 指定。第一个是 UDP 探测的结果。"""
+    ips = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.append(info[4][0])
+    except OSError:
+        pass
+    first = lan_ip()
+    out = [first] if usable_ip(first) else []
+    for ip in ips:
+        if usable_ip(ip) and ip not in out:
+            out.append(ip)
+    return out
+
+
 def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = None, port: int = 8000,
-               settings: Optional[RoundSettings] = None, use_db: bool = True) -> FastAPI:
+               settings: Optional[RoundSettings] = None, use_db: bool = True,
+               join_host: Optional[str] = None) -> FastAPI:
+    """join_host：学生加入地址里的主机名，不给就每次自动探测（网络变了也能跟上）。"""
     teacher_key = teacher_key or secrets.token_urlsafe(6)
     data_dir = Path(data_dir) if data_dir else ROOT / "data"
     # 老师保存的地图和模板：跨课堂长期保存在 <data>/maps/
@@ -106,7 +130,7 @@ def create_app(data_dir: Optional[Path] = None, teacher_key: Optional[str] = Non
         return FileResponse(STATIC / "screen" / "index.html")
 
     def join_url() -> str:
-        return f"http://{lan_ip()}:{app.state.port}/"
+        return f"http://{join_host or lan_ip()}:{app.state.port}/"
 
     def teacher_ok(host: str, key: Optional[str]) -> bool:
         return host in LOCAL_HOSTS or bool(key and secrets.compare_digest(key, app.state.teacher_key))

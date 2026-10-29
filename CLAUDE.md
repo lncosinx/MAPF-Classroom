@@ -20,7 +20,7 @@
 1. 回复、日志、解释**只用简体中文或英文**，**严禁韩文和日文**。发现输出里出现了，立刻重写。
 2. 代码标识符（变量、类、函数）用英文；**注释用简体中文**，和 vendor 进来的 Chameleon 代码保持一致。
 
-## 当前状态（2026-10-27）
+## 当前状态（2026-10-29）
 
 - **M0 已完成**（验收结果见 `docs/M0_REPORT.md`）：
   - `classroom/ai/madcl`（vendor，见其 `VENDORED.md`）、`ModelPolicy`、`lacam.py` + `ExpertPolicy`（含简易专家回退）；
@@ -38,9 +38,12 @@
   `/screen` + `/ws/screen`；老师页组切换、排行榜、投屏开关；`tools/loadtest.py`（8 组 × 16 体、40 人：p95 66 ms）。
 - **M5 已完成**（见 `docs/M5_REPORT.md`，含三种导出格式说明）：`storage/{review,export}.py`；老师 RPC 的 `review.*` 方法；`/api/export/{课}/{局|all}.{csv|jsonl|svg}`（鉴权同老师 WS）；
   学生 WS 的 `review` 消息；老师页"复盘"标签（`static/teacher/review.js`）、学生结束页的"复盘我的每一步"；测试 `tests/test_review.py`。
-- **M6 代码完成，待走查**（清单 `docs/M6_WALKTHROUGH.md`）：`ws.js` 的 `ANIMALS` / `agentAvatar`；地图组件支持 `emoji` / `badge` / `shake` / `arrived`；
-  学生页简洁模式（动物、图标、彩带、星星）和进阶模式（AI 概率条、我的统计）；被挡晃动、新一步闪框、倒计时脉冲；投屏和老师页的动物。
-- 下一步：用户走查 M6 → 写 `docs/M6_REPORT.md` → M7（Windows 绿色包）。
+- **M6 已完成**（见 `docs/M6_REPORT.md`，含老师页三种布局）：`ws.js` 的 `ANIMALS` / `agentAvatar`；地图组件支持 `emoji` / `badge` / `shake` / `arrived`；
+  学生页简洁模式（动物、"图标 + 短词"、彩带、星星）和进阶模式（AI 概率条、我的统计）；老师页课堂 / 地图工坊 / 复盘各有布局，右栏可收起。
+- **M7 已完成**（见 `docs/M7_REPORT.md`，含包结构、体积和踩过的坑）：`packaging/`（`build_windows.py`、`mingw-w64.cmake`、`requirements-win.txt`、两个 bat、`README.txt`，
+  构建时汇总 `THIRD_PARTY_LICENSES.txt`）；`classroom/server/firewall.py`；`__main__.py` 的 `--open-browser` / `--ip` / 端口被占提示 / 中文路径提醒；
+  测试 `tests/test_packaging.py`。zip 超过 GitHub 单文件 100 MB 上限，**不进仓库**，发布成 GitHub Release 的附件（v1.0.0 起）。
+- 全部里程碑 M0–M7 完成。
 - 开发机是 Linux 笔记本（Ryzen 7535H，12 核，无 AVX512），**最终部署在 Windows 老师机上**（见下文"跨平台约束"）。
 - 仓库目前挂载在 `/root/Chameleon/MAPF-Classroom`（Chameleon 仓库目录下），只是临时位置；代码里所有路径都相对仓库根，不依赖 Chameleon。
 
@@ -94,6 +97,20 @@ curl -L -o static/vendor/vue.global.prod.js https://cdn.jsdelivr.net/npm/vue@3.5
 .venv/bin/python tools/loadtest.py --groups 8 --agents 16 --students 40   # 压测：自己在 8768 端口起临时服务，目标 p95 < 1 s
 #   投屏页 http://<本机局域网IP>:8000/screen（比赛中只显示进度，各组结束后显示全图）
 ```
+
+```bash
+# M7：Windows 绿色包（在 Linux 上组装；需要 uv、cmake、mingw-w64 的 posix 线程版编译器）
+.venv/bin/python packaging/build_windows.py             # 产物 packaging/out/MAPF-Classroom-win64-<日期>.zip
+.venv/bin/python packaging/build_windows.py --no-zip    # 只组装目录 packaging/out/MAPF-Classroom
+#   下载缓存在 packaging/cache/（嵌入式 Python、装好的 Windows site-packages），改了 requirements-win.txt 会自动重装
+#   wine 预检（容器里可用，wine64 在 /usr/lib/wine/wine64，要 unset DISPLAY、WINEPREFIX 放 scratchpad，
+#   python.exe 要写绝对路径，否则 wine 会去 system32 找）
+```
+
+**布局自检用无头浏览器**：scratchpad 里有一个 playwright venv 和 chromium-headless-shell，缺的系统库解包在 scratchpad/libs 下，
+运行时加 `LD_LIBRARY_PATH=<scratchpad>/libs/usr/lib/x86_64-linux-gnu`。截图前先在单独端口起临时服务、用 `play_bots.py` 打一局造数据。
+（scratchpad 是会话级的，换会话要重装：`uv venv` + `uv pip install playwright` + `playwright install chromium-headless-shell`，
+系统库用 `apt-get download` + `dpkg -x` 解包，不往系统里装。）
 
 前端没有构建步骤，也就没有编译期检查。改了 `static/` 下的 JS 之后，可以用 VS Code server 自带的 node 做语法检查：
 `~/.vscode-server/bin/*/node --check <文件>`（ES module 要先拷成 `.mjs`）。模板错误只能在浏览器里看到。
@@ -214,6 +231,11 @@ numpy 的 float32 `pow` 按指令集分派，足迹通道（ch3）有 27 个衰�
 - 不依赖 `fork`、`uvloop`、`signal` 技巧或其他 Linux 专有 API。需要多进程时只用 spawn 也安全的写法。
 - 动态库用 ctypes 按平台加载，不写死 `.so`。
 - 服务要监听 `0.0.0.0`。启动脚本里要打印局域网地址和二维码，并提示老师"首次运行时 Windows 防火墙弹窗请勾选'专用网络'"。
+- **绿色包里的 .bat 只写 ASCII**（cmd 按 OEM 代码页解析批处理），中文提示一律由 Python 打印；包里的文件名也只用 ASCII
+  （资源管理器自带的解压不一定认 zip 的 UTF-8 文件名标记）。给老师看的 `README.txt` 是 UTF-8 带 BOM + CRLF。
+- 终端二维码在 Windows 上不用 `compact`：中文控制台把半格方块画成全角，二维码会变形。
+- **精简 torch 只能删资源**（`include/`、`share/`、`lib/*.lib`），不能删代码目录：`torch/testing` 是正经模块，曾被当测试删掉，Windows 上 `import torch` 直接 ModuleNotFoundError（2026-10-29 实机踩过）。`build_windows.py` 的 `prune_dir` 遇到含 `.py` 的目录会拒绝删除。
+- LaCAM 交叉编译：`uint` 是 glibc 的别名，mingw 没有，`native/lacam/lacam3/include/utils.hpp` 里已补；`lacam.dll` 全静态链接，只依赖 KERNEL32 / msvcrt。
 
 ## 前端约定
 

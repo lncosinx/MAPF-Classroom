@@ -23,6 +23,11 @@
 #include <unordered_map>
 #include <vector>
 
+// uint 是 glibc 在 <sys/types.h> 里给的别名，mingw-w64 / MSVC 没有（M7 交叉编译 Windows 版时补上）
+#ifdef _WIN32
+using uint = unsigned int;
+#endif
+
 using Time = std::chrono::steady_clock;
 
 // time manager
