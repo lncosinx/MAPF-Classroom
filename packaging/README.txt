@@ -50,4 +50,5 @@ MAPF 课堂 · 使用说明（Windows 绿色版）
 
 六、第三方软件
 ------------------------------------------
+· 本软件以 MIT 许可发布（LICENSE.txt）
 · 包里带的 Python、PyTorch 等第三方软件的许可证，汇总在 THIRD_PARTY_LICENSES.txt

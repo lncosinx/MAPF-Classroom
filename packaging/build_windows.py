@@ -291,6 +291,8 @@ def stage_top(dst: Path) -> None:
     (dst / "start_classroom.bat").write_bytes(bat_bytes((PKG / "start_classroom.bat").read_text(encoding="utf-8")))
     (dst / "allow_firewall.bat").write_bytes(bat_bytes((PKG / "allow_firewall.bat").read_text(encoding="utf-8")))
     (dst / "README.txt").write_bytes(txt_bytes((PKG / "README.txt").read_text(encoding="utf-8")))
+    # 本项目自己的许可证（MIT），和第三方的分开放
+    (dst / "LICENSE.txt").write_bytes(txt_bytes((ROOT / "LICENSE").read_text(encoding="utf-8")))
     lic = third_party_licenses(dst / "python" / "Lib" / "site-packages", dst / "python")
     (dst / "THIRD_PARTY_LICENSES.txt").write_bytes(txt_bytes(lic))
     log(f"  第三方许可证汇总：{len(lic) // 1000} KB")
